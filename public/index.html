@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ExpressPost - Premium API Client & Multithreaded Runner</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:ital,wght@0,400;0,700;1,700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="style.css">
+    <!-- Ace Editor via CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7/ace.js" type="text/javascript" charset="utf-8"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7/ext-language_tools.min.js" type="text/javascript" charset="utf-8"></script>
+</head>
+<body>
+    <div class="xp-title-bar">
+        <div class="xp-title-bar-text">
+            <img src="logo.png" alt="ExpressPost Logo" style="height: 18px; width: 18px; margin-right: 6px; border-radius: 2px; vertical-align: middle;">
+            <span style="font-family: 'Outfit', sans-serif; font-style: italic; font-weight: 700; font-size: 14px;">ExpressPost</span> - Premium API Client
+        </div>
+    </div>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <img src="logo.png" alt="ExpressPost Logo" style="height: 28px; width: 28px; margin-right: 8px; border-radius: 4px; vertical-align: middle;">
+                    <span class="logo-text" style="font-family: 'Outfit', sans-serif; font-style: italic;">ExpressPost</span>
+                </div>
+                <div class="env-selector-container">
+                    <select id="active-env-select" class="env-select">
+                        <option value="globals">No Environment</option>
+                    </select>
+                    <button id="quick-env-manage" class="icon-btn" title="Manage Environments" aria-label="Manage Environments">
+                        <i class="fa-solid fa-gear"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div class="sidebar-nav-tabs">
+                <button class="nav-tab active" data-tab="collections">
+                    <i class="fa-solid fa-folder"></i> Collections
+                </button>
+                <button class="nav-tab" data-tab="environments">
+                    <i class="fa-solid fa-database"></i> Environments
+                </button>
+                <button class="nav-tab" data-tab="history">
+                    <i class="fa-solid fa-clock-rotate-left"></i> History
+                </button>
+                <button class="nav-tab" data-tab="mocks">
+                    <i class="fa-solid fa-server"></i> Mocks
+                </button>
+            </div>
+
+            <div class="sidebar-content">
+                <!-- Collections Tab -->
+                <div class="sidebar-pane active" id="pane-collections">
+                    <div class="pane-actions">
+                        <button id="btn-new-collection" class="btn btn-sm btn-primary">
+                            <i class="fa-solid fa-plus"></i> New Collection
+                        </button>
+                        <button id="btn-import-collection" class="btn btn-sm btn-secondary" title="Import Postman Collection">
+                            <i class="fa-solid fa-file-import"></i> Import
+                        </button>
+                        <input type="file" id="file-import-input" style="display: none;" accept=".json">
+                    </div>
+                    <div id="collections-list" class="list-container">
+                        <!-- Dynamic Collections Load -->
+                        <div class="empty-state">
+                            <i class="fa-regular fa-folder-open"></i>
+                            <p>No collections yet</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Environments Tab -->
+                <div class="sidebar-pane" id="pane-environments">
+                    <div class="pane-actions">
+                        <button id="btn-new-env" class="btn btn-sm btn-primary">
+                            <i class="fa-solid fa-plus"></i> Add Environment
+                        </button>
+                        <button id="btn-manage-globals" class="btn btn-sm btn-secondary">
+                            <i class="fa-solid fa-globe"></i> Globals
+                        </button>
+                    </div>
+                    <div id="environments-list" class="list-container">
+                        <!-- Dynamic Environments Load -->
+                    </div>
+                </div>
+
+                <!-- History Tab -->
+                <div class="sidebar-pane" id="pane-history">
+                    <div class="pane-actions">
+                        <button id="btn-clear-history" class="btn btn-sm btn-danger w-100">
+                            <i class="fa-solid fa-trash-can"></i> Clear History
+                        </button>
+                    </div>
+                    <div id="history-list" class="list-container">
+                        <!-- Dynamic History Load -->
+                    </div>
+                </div>
+
+                <!-- Mocks Tab -->
+                <div class="sidebar-pane" id="pane-mocks">
+                    <div class="pane-actions">
+                        <button id="btn-new-mock" class="btn btn-sm btn-primary">
+                            <i class="fa-solid fa-plus"></i> New Mock
+                        </button>
+                        <button id="btn-sync-mocks" class="btn btn-sm btn-secondary" title="Sync Mock configuration to Server">
+                            <i class="fa-solid fa-rotate"></i> Sync Server
+                        </button>
+                    </div>
+                    <div id="mocks-list" class="list-container">
+                        <!-- Dynamic Mocks Load -->
+                        <div class="empty-state">
+                            <i class="fa-solid fa-server"></i>
+                            <p>No mocks configured yet</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer Utilities -->
+            <div class="sidebar-footer">
+                <button id="btn-open-runner" class="btn btn-accent w-100">
+                    <i class="fa-solid fa-circle-play"></i> Collection Runner
+                </button>
+                <div class="console-trigger-wrapper">
+                    <button id="btn-toggle-console" class="console-btn" aria-label="Toggle Console">
+                        <i class="fa-solid fa-terminal"></i> Console (<span id="console-log-count">0</span>)
+                    </button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Sidebar Resizer -->
+        <div class="resizer resizer-x" id="sidebar-resizer"></div>
+
+        <!-- Main Request/Response Workspace -->
+        <main class="workspace">
+            <!-- Tabs Bar -->
+            <div class="workspace-tabs-container">
+                <div class="workspace-tabs" id="request-tabs">
+                    <!-- Dynamic Tabs -->
+                </div>
+                <button id="btn-add-tab" class="add-tab-btn" title="Open New Tab" aria-label="Open New Tab">
+                    <i class="fa-solid fa-plus"></i>
+                </button>
+            </div>
+
+            <div id="workspace-content" class="workspace-content">
+                <!-- Request Pane -->
+                <div class="request-container">
+                    <div class="request-address-bar">
+                        <select id="request-method" class="method-select">
+                            <option value="GET">GET</option>
+                            <option value="POST">POST</option>
+                            <option value="PUT">PUT</option>
+                            <option value="DELETE">DELETE</option>
+                            <option value="PATCH">PATCH</option>
+                            <option value="OPTIONS">OPTIONS</option>
+                            <option value="HEAD">HEAD</option>
+                        </select>
+                        <input type="text" id="request-url" placeholder="https://api.example.com/endpoint" class="url-input" autocomplete="off">
+                        <div class="engine-toggle" title="Direct makes request from browser. Proxy passes through Node.js to bypass CORS.">
+                            <select id="request-engine" class="engine-select">
+                                <option value="proxy">Proxy Mode</option>
+                                <option value="direct">Direct Mode</option>
+                            </select>
+                        </div>
+                        <button id="btn-send-request" class="btn btn-primary send-btn">
+                            <span>Send</span> <i class="fa-solid fa-paper-plane"></i>
+                        </button>
+                        <button id="btn-save-request" class="btn btn-secondary save-btn" title="Save Request">
+                            <i class="fa-solid fa-floppy-disk"></i>
+                        </button>
+                        <button id="btn-import-curl" class="btn btn-secondary curl-btn" title="Import from cURL">
+                            <i class="fa-solid fa-file-import"></i> <span>Import cURL</span>
+                        </button>
+                        <button id="btn-export-curl" class="btn btn-secondary curl-btn" title="Generate Code Snippet">
+                            <i class="fa-solid fa-code"></i> <span>Generate Code</span>
+                        </button>
+                    </div>
+
+                    <!-- Request Configuration Tabs -->
+                    <div class="config-tabs-container">
+                        <div class="config-tabs">
+                            <button class="config-tab active" data-config="params">Params</button>
+                            <button class="config-tab" data-config="auth">Authorization</button>
+                            <button class="config-tab" data-config="headers">Headers (<span id="header-badge-count">0</span>)</button>
+                            <button class="config-tab" data-config="body">Body</button>
+                            <button class="config-tab" data-config="pre-request">Pre-request Script</button>
+                            <button class="config-tab" data-config="tests">Tests</button>
+                        </div>
+
+                        <div class="config-panes">
+                            <!-- Params Pane -->
+                            <div class="config-pane active" id="config-pane-params">
+                                <h3>Query Parameters</h3>
+                                <table class="key-value-table" id="params-table">
+                                    <thead>
+                                        <tr>
+                                            <th width="30px"></th>
+                                            <th>Key</th>
+                                            <th>Value</th>
+                                            <th>Description</th>
+                                            <th width="40px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="params-table-body">
+                                        <!-- Dynamic Key-Value Rows -->
+                                    </tbody>
+                                </table>
+                                <button class="btn btn-sm btn-secondary add-row-btn" data-table="params">
+                                    <i class="fa-solid fa-plus"></i> Add Parameter
+                                </button>
+                            </div>
+
+                            <!-- Auth Pane -->
+                            <div class="config-pane" id="config-pane-auth">
+                                <div class="auth-layout">
+                                    <div class="auth-type-selector">
+                                        <label for="auth-type">Auth Type</label>
+                                        <select id="auth-type" class="form-control">
+                                            <option value="none">No Auth</option>
+                                            <option value="bearer">Bearer Token</option>
+                                            <option value="basic">Basic Auth</option>
+                                            <option value="apikey">API Key</option>
+                                        </select>
+                                    </div>
+                                    <div class="auth-fields" id="auth-fields-container">
+                                        <!-- Dynamic fields based on auth selection -->
+                                        <div class="auth-empty-state" id="auth-none-fields">
+                                            <p>This request does not use any authorization headers.</p>
+                                        </div>
+                                        
+                                        <div class="auth-form-fields hidden" id="auth-bearer-fields">
+                                            <div class="form-group">
+                                                <label for="auth-bearer-token">Token</label>
+                                                <input type="text" id="auth-bearer-token" placeholder="Token value (supports {{variable}})" class="form-control code-font">
+                                            </div>
+                                        </div>
+
+                                        <div class="auth-form-fields hidden" id="auth-basic-fields">
+                                            <div class="form-group">
+                                                <label for="auth-basic-username">Username</label>
+                                                <input type="text" id="auth-basic-username" placeholder="Username" class="form-control">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="auth-basic-password">Password</label>
+                                                <input type="password" id="auth-basic-password" placeholder="Password" class="form-control">
+                                            </div>
+                                        </div>
+
+                                        <div class="auth-form-fields hidden" id="auth-apikey-fields">
+                                            <div class="form-group">
+                                                <label for="auth-apikey-key">Key</label>
+                                                <input type="text" id="auth-apikey-key" placeholder="Header or Query Key" class="form-control code-font">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="auth-apikey-value">Value</label>
+                                                <input type="text" id="auth-apikey-value" placeholder="Value" class="form-control code-font">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="auth-apikey-in">Add to</label>
+                                                <select id="auth-apikey-in" class="form-control">
+                                                    <option value="header">Header</option>
+                                                    <option value="query">Query Params</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Headers Pane -->
+                            <div class="config-pane" id="config-pane-headers">
+                                <h3>Headers</h3>
+                                <table class="key-value-table" id="headers-table">
+                                    <thead>
+                                        <tr>
+                                            <th width="30px"></th>
+                                            <th>Key</th>
+                                            <th>Value</th>
+                                            <th>Description</th>
+                                            <th width="40px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="headers-table-body">
+                                        <!-- Dynamic Key-Value Rows -->
+                                    </tbody>
+                                </table>
+                                <button class="btn btn-sm btn-secondary add-row-btn" data-table="headers">
+                                    <i class="fa-solid fa-plus"></i> Add Header
+                                </button>
+                            </div>
+
+                            <!-- Body Pane -->
+                            <div class="config-pane" id="config-pane-body">
+                                <div class="body-settings-bar">
+                                    <div class="radio-group">
+                                        <label class="radio-label">
+                                            <input type="radio" name="body-type" value="none" checked> None
+                                        </label>
+                                        <label class="radio-label">
+                                            <input type="radio" name="body-type" value="form-data"> form-data
+                                        </label>
+                                        <label class="radio-label">
+                                            <input type="radio" name="body-type" value="urlencoded"> x-www-form-urlencoded
+                                        </label>
+                                        <label class="radio-label">
+                                            <input type="radio" name="body-type" value="raw"> raw
+                                        </label>
+                                    </div>
+                                    <select id="body-raw-type" class="body-raw-type-select hidden">
+                                        <option value="application/json">JSON</option>
+                                        <option value="text/plain">Text</option>
+                                        <option value="application/xml">XML</option>
+                                        <option value="text/html">HTML</option>
+                                    </select>
+                                </div>
+
+                                <div class="body-content-area">
+                                    <div id="body-pane-none" class="body-type-pane active">
+                                        <p class="body-empty-msg">This request does not have a body.</p>
+                                    </div>
+
+                                    <div id="body-pane-form-data" class="body-type-pane">
+                                        <table class="key-value-table" id="formdata-table">
+                                            <thead>
+                                                <tr>
+                                                    <th width="30px"></th>
+                                                    <th width="150px">Key</th>
+                                                    <th>Value</th>
+                                                    <th width="100px">Type</th>
+                                                    <th width="40px"></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="formdata-table-body">
+                                                <!-- Dynamic Form Data Rows -->
+                                            </tbody>
+                                        </table>
+                                        <button class="btn btn-sm btn-secondary add-row-btn" data-table="formdata">
+                                            <i class="fa-solid fa-plus"></i> Add Form Field
+                                        </button>
+                                    </div>
+
+                                    <div id="body-pane-urlencoded" class="body-type-pane">
+                                        <table class="key-value-table" id="urlencoded-table">
+                                            <thead>
+                                                <tr>
+                                                    <th width="30px"></th>
+                                                    <th>Key</th>
+                                                    <th>Value</th>
+                                                    <th width="40px"></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="urlencoded-table-body">
+                                                <!-- Dynamic URL Encoded Rows -->
+                                            </tbody>
+                                        </table>
+                                        <button class="btn btn-sm btn-secondary add-row-btn" data-table="urlencoded">
+                                            <i class="fa-solid fa-plus"></i> Add Field
+                                        </button>
+                                    </div>
+
+                                    <div id="body-pane-raw" class="body-type-pane">
+                                        <div id="body-editor" class="ace-editor-container"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Pre-request Script Pane -->
+                            <div class="config-pane" id="config-pane-pre-request">
+                                <div class="script-header">
+                                    <h3>Pre-request Script</h3>
+                                    <p class="script-desc">Write JavaScript to run before this request. Use <code>pm.environment.set()</code> to set dynamic variables.</p>
+                                </div>
+                                <div id="pre-request-editor" class="ace-editor-container script-editor"></div>
+                            </div>
+
+                            <!-- Tests Pane -->
+                            <div class="config-pane" id="config-pane-tests">
+                                <div class="script-header">
+                                    <h3>Test Scripts</h3>
+                                    <p class="script-desc">Write assertions to run after the response is received. Example: <code>pm.test("Status is 200", () => { pm.response.to.have.status(200); });</code></p>
+                                </div>
+                                <div class="script-layout">
+                                    <div id="tests-editor" class="ace-editor-container script-editor"></div>
+                                    <div class="script-snippets">
+                                        <h4>Test Snippets</h4>
+                                        <button class="snippet-btn" data-snippet="status-200">Status code is 200</button>
+                                        <button class="snippet-btn" data-snippet="json-val">Response body: JSON value check</button>
+                                        <button class="snippet-btn" data-snippet="contains-string">Response body: Contains string</button>
+                                        <button class="snippet-btn" data-snippet="set-env">Set environment variable</button>
+                                        <button class="snippet-btn" data-snippet="response-time">Response time is less than 200ms</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Horizontal Pane Resizer -->
+                <div class="resizer resizer-y" id="pane-resizer"></div>
+
+                <!-- Response Pane -->
+                <div class="response-container">
+                    <div class="response-header">
+                        <div class="response-title">Response</div>
+                        <div class="response-meta hidden" id="response-metadata">
+                            <span class="meta-item badge" id="resp-status">200 OK</span>
+                            <span class="meta-item"><i class="fa-regular fa-clock"></i> <span id="resp-time">0 ms</span></span>
+                            <span class="meta-item"><i class="fa-solid fa-download"></i> <span id="resp-size">0 B</span></span>
+                        </div>
+                    </div>
+
+                    <div class="response-empty" id="response-empty-state">
+                        <i class="fa-regular fa-paper-plane animate-float"></i>
+                        <p>Send a request to see the response</p>
+                    </div>
+
+                    <div class="response-content hidden" id="response-content-area">
+                        <div class="response-tabs-bar">
+                            <div class="response-tabs">
+                                <button class="response-tab active" data-resp-tab="body">Body</button>
+                                <button class="response-tab" data-resp-tab="headers">Headers</button>
+                                <button class="response-tab" data-resp-tab="results">Test Results (<span id="test-pass-badge">0/0</span>)</button>
+                            </div>
+                            <div class="response-body-format-controls hidden" id="resp-body-controls">
+                                <button class="icon-btn" id="btn-copy-response" title="Copy Response" aria-label="Copy Response" style="margin-right: 8px;"><i class="fa-solid fa-copy"></i></button>
+                                <button class="format-btn active" data-format="pretty">Pretty</button>
+                                <button class="format-btn" data-format="raw">Raw</button>
+                                <button class="format-btn" data-format="preview">Preview</button>
+                            </div>
+                        </div>
+
+                        <div class="response-panes">
+                            <!-- Response Body Pane -->
+                            <div class="response-pane active" id="resp-pane-body">
+                                <div id="resp-pretty-pane" class="resp-format-pane active">
+                                    <div id="response-editor" class="ace-editor-container"></div>
+                                </div>
+                                <div id="resp-raw-pane" class="resp-format-pane">
+                                    <textarea id="response-raw-text" readonly class="code-font"></textarea>
+                                </div>
+                                <div id="resp-preview-pane" class="resp-format-pane">
+                                    <iframe id="response-preview-frame"></iframe>
+                                </div>
+                            </div>
+
+                            <!-- Response Headers Pane -->
+                            <div class="response-pane" id="resp-pane-headers">
+                                <table class="response-headers-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Header</th>
+                                            <th>Value</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="response-headers-body">
+                                        <!-- Dynamic Headers -->
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <!-- Response Test Results Pane -->
+                            <div class="response-pane" id="resp-pane-results">
+                                <div class="test-progress-summary">
+                                    <div class="progress-bar-container">
+                                        <div class="progress-bar-fill" id="test-progress-bar" style="width: 0%;"></div>
+                                    </div>
+                                    <div class="progress-text" id="test-progress-text">0 / 0 Tests Passed</div>
+                                </div>
+                                <div id="test-results-list" class="test-results-list">
+                                    <!-- Dynamic test results -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Environments Modal -->
+    <div class="modal" id="modal-env">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="env-modal-title">Manage Environment</h2>
+                    <button class="modal-close-btn" aria-label="Close Modal">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="env-name-input">Environment Name</label>
+                        <input type="text" id="env-name-input" class="form-control" placeholder="e.g. Production">
+                    </div>
+                    <h3>Variables</h3>
+                    <table class="key-value-table" id="env-variables-table">
+                        <thead>
+                            <tr>
+                                <th width="30px"></th>
+                                <th>Variable Key</th>
+                                <th>Initial Value</th>
+                                <th>Current Value</th>
+                                <th width="40px"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="env-variables-body">
+                            <!-- Dynamic variable rows -->
+                        </tbody>
+                    </table>
+                    <button class="btn btn-sm btn-secondary" id="btn-add-env-variable">
+                        <i class="fa-solid fa-plus"></i> Add Variable
+                    </button>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary modal-close-action">Cancel</button>
+                    <button class="btn btn-primary" id="btn-save-env-action">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Save Request Modal -->
+    <div class="modal" id="modal-save-request">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Save Request</h2>
+                    <button class="modal-close-btn" aria-label="Close Modal">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="save-req-name">Request Name</label>
+                        <input type="text" id="save-req-name" class="form-control" placeholder="e.g. Get User Profile">
+                    </div>
+                    <div class="form-group">
+                        <label for="save-req-desc">Description (Optional)</label>
+                        <textarea id="save-req-desc" class="form-control" placeholder="Describe what this request does..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="save-req-collection">Select Collection</label>
+                        <select id="save-req-collection" class="form-control">
+                            <!-- Dynamic collections -->
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary modal-close-action">Cancel</button>
+                    <button class="btn btn-primary" id="btn-confirm-save-request">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Console Panel Footer Console -->
+    <div class="dev-console hidden" id="dev-console-panel">
+        <div class="console-header">
+            <div class="console-title"><i class="fa-solid fa-terminal"></i> AeroPost Execution Console</div>
+            <div class="console-actions">
+                <button id="btn-clear-console" class="btn btn-sm btn-secondary"><i class="fa-solid fa-ban"></i> Clear</button>
+                <button id="btn-close-console" class="btn btn-sm btn-secondary" aria-label="Close Console">&times;</button>
+            </div>
+        </div>
+        <div class="console-body" id="console-logs-container">
+            <!-- Dynamic logs -->
+            <div class="console-empty">Console is clean. Run requests with console.log() to see output.</div>
+        </div>
+    </div>
+
+    <!-- COLLECTION RUNNER OVERLAY VIEW -->
+    <div class="runner-overlay hidden" id="runner-view">
+        <header class="xp-title-bar">
+            <div class="xp-title-bar-text">
+                <i class="fa-solid fa-circle-play text-accent"></i>
+                <span><span style="font-family: 'Outfit', sans-serif; font-style: italic; font-weight: 700;">ExpressPost</span> - Collection Runner</span>
+            </div>
+            <div class="xp-title-bar-controls">
+                <button id="btn-close-runner" class="xp-control-btn close" title="Close Runner">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+        </header>
+
+        <div class="runner-container">
+            <!-- Left Config Sidebar -->
+            <aside class="runner-config-panel">
+                <h3>Run Configurations</h3>
+                
+                <div class="runner-config-grid">
+                    <div class="form-group">
+                        <label for="runner-select-collection">Choose a Collection</label>
+                        <select id="runner-select-collection" class="form-control">
+                            <!-- Dynamic options -->
+                        </select>
+                    </div>
+
+                    <div id="runner-request-list" class="runner-request-list card hidden" style="grid-column: 1 / -1; padding: 12px; margin-bottom: 0;">
+                        <h4 style="margin: 0 0 8px 0; font-size: 13px; color: var(--text-main); font-weight: 600;">Requests to Run</h4>
+                        <div id="runner-request-checklist" class="checklist-container">
+                            <!-- Dynamic checkboxes -->
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="runner-select-env">Environment</label>
+                        <select id="runner-select-env" class="form-control">
+                            <option value="globals">No Environment</option>
+                            <!-- Dynamic options -->
+                        </select>
+                    </div>
+
+                    <!-- Data File Upload Section -->
+                    <div class="data-file-section card" style="grid-column: 1 / -1; padding: 12px; margin-bottom: 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <h4 style="margin: 0;">Data File (Optional)</h4>
+                            <div id="runner-data-info" class="help-text hidden" style="margin: 0; font-weight: 500;">
+                                <span id="runner-data-filename" class="text-accent" style="margin-right: 4px;"></span> 
+                                (<span id="runner-data-rows">0</span> iterations loaded)
+                            </div>
+                        </div>
+                        <div class="form-group mb-0">
+                            <label for="runner-data-file" class="btn btn-secondary w-100" style="border-style: dashed; padding: 12px; font-weight: normal; font-size: 13px;">
+                                <i class="fa-solid fa-file-import"></i> Select CSV or JSON File
+                            </label>
+                            <input type="file" id="runner-data-file" accept=".csv,.json" class="hidden">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="runner-iterations">Iterations</label>
+                        <input type="number" id="runner-iterations" class="form-control" value="1" min="1">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="runner-delay">Delay (ms)</label>
+                        <input type="number" id="runner-delay" class="form-control" value="0" min="0">
+                    </div>
+                </div>
+
+                <!-- Multithreading Configuration -->
+                <div class="multithreading-settings card mt-0">
+                    <h4>Concurrency & Multithreading</h4>
+                    <div class="form-group">
+                        <label>Execution Mode</label>
+                        <div class="toggle-group">
+                            <label class="radio-label">
+                                <input type="radio" name="runner-mode" value="sequential" checked>
+                                <span>Sequential</span>
+                            </label>
+                            <label class="radio-label" title="Utilizes parallel Web Workers to execute multiple API calls simultaneously">
+                                <input type="radio" name="runner-mode" value="parallel">
+                                <span>Parallel</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="form-group hidden" id="runner-thread-setting" style="margin-top: 8px;">
+                        <label for="runner-threads">Execution Threads (Workers)</label>
+                        <div class="slider-container">
+                            <input type="range" id="runner-threads" min="1" max="100" value="10" class="slider">
+                            <span id="runner-threads-val" class="slider-value">10 Threads</span>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="btn-start-run" class="btn btn-primary btn-lg w-100" style="margin-top: auto;">
+                    <i class="fa-solid fa-play"></i> Start Runner Execution
+                </button>
+            </aside>
+            <div class="resizer resizer-x" id="runner-sidebar-resizer"></div>
+
+            <!-- Main Results Area -->
+            <main class="runner-results-panel">
+                <!-- Initial State -->
+                <div class="runner-empty" id="runner-results-empty">
+                    <i class="fa-solid fa-list-check animate-pulse"></i>
+                    <h2>Configure run options and click Start</h2>
+                    <p>Results, test failures, and statistics will display here in real-time.</p>
+                </div>
+
+                <!-- Running & Results State -->
+                <div class="runner-results-content hidden" id="runner-results-workspace">
+                    <div class="runner-summary-cards">
+                        <div class="runner-card stats-pass">
+                            <div class="card-num" id="run-stat-passed">0</div>
+                            <div class="card-label">Tests Passed</div>
+                        </div>
+                        <div class="runner-card stats-fail">
+                            <div class="card-num" id="run-stat-failed">0</div>
+                            <div class="card-label">Tests Failed</div>
+                        </div>
+                        <div class="runner-card stats-avg-time">
+                            <div class="card-num" id="run-stat-avg-time">0 ms</div>
+                            <div class="card-label">Avg Response Time</div>
+                        </div>
+                        <div class="runner-card stats-total">
+                            <div class="card-num" id="run-stat-total-req">0 / 0</div>
+                            <div class="card-label">Requests Executed</div>
+                        </div>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div class="runner-progress-wrapper">
+                        <div class="runner-progress-text" id="runner-progress-status">Running iterations...</div>
+                        <div class="progress-bar-container large">
+                            <div class="progress-bar-fill animated" id="runner-progress-fill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+
+                    <div class="runner-results-actions">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <h3 style="margin: 0;">Detailed Run Logs</h3>
+                            <div class="runner-log-filters" id="runner-log-filters" style="display: flex; gap: 6px; margin-left: 10px;">
+                                <button class="btn btn-sm btn-secondary active" data-filter="all">All</button>
+                                <button class="btn btn-sm btn-secondary" data-filter="pass">Passed</button>
+                                <button class="btn btn-sm btn-secondary" data-filter="fail">Failed</button>
+                            </div>
+                        </div>
+                        <div class="actions-group">
+                            <button id="btn-export-run" class="btn btn-sm btn-secondary hidden" title="Export run report as JSON">
+                                <i class="fa-solid fa-file-export"></i> Export Report
+                            </button>
+                            <button id="btn-pause-run" class="btn btn-sm btn-secondary hidden" title="Pause/Resume current run">
+                                <i class="fa-solid fa-pause"></i> Pause
+                            </button>
+                            <button id="btn-stop-run" class="btn btn-sm btn-danger" title="Stop current run">
+                                <i class="fa-solid fa-stop"></i> Stop Run
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Iteration/Request Results Log List -->
+                    <div class="runner-log-list" id="runner-execution-logs">
+                        <!-- Dynamic runs appended here -->
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Snippet Modal -->
+    <div class="modal-overlay hidden" id="snippet-modal">
+        <div class="modal-content" style="width: 700px; max-width: 90vw;">
+            <div class="modal-header">
+                <h2>Generate Code Snippet</h2>
+                <button class="icon-btn close-modal" id="close-snippet-modal"><i class="fa-solid fa-times"></i></button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px;">
+                <div class="form-group">
+                    <label>Language</label>
+                    <select id="snippet-lang-select" class="form-control">
+                        <option value="curl">cURL</option>
+                        <option value="python">Python (Requests)</option>
+                        <option value="node">Node.js (Axios)</option>
+                    </select>
+                </div>
+                <div id="snippet-editor" class="ace-editor-container" style="height: 350px;"></div>
+            </div>
+            <div class="modal-footer" style="justify-content: flex-end;">
+                <button class="btn btn-primary" id="btn-copy-snippet"><i class="fa-solid fa-copy"></i> Copy to Clipboard</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Core App JS Scripts -->
+    <script src="sandbox.js"></script>
+    <script src="runner.js?v=2"></script>
+    <script src="snippets.js"></script>
+    <script src="app.js?v=2"></script>
+</body>
+</html>
