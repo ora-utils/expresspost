@@ -13,6 +13,10 @@ app.use(cors());
 // Serve static files from the public folder
 app.use(express.static(path.join(__dirname, 'public')));
 
+app.get('/oauth/callback', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'oauth-callback.html'));
+});
+
 // Support parsing JSON and URL-encoded bodies for proxy inputs
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -42,10 +46,12 @@ app.post('/api/proxy', async (req, res) => {
     let requestData = body;
     
     // For form-data payload, if it was sent as structured key-value array
-    if (body && typeof body === 'object' && cleanHeaders['content-type'] && cleanHeaders['content-type'].includes('multipart/form-data')) {
+    const contentTypeHeader = Object.keys(cleanHeaders).find(key => key.toLowerCase() === 'content-type');
+    if (body && typeof body === 'object' && contentTypeHeader &&
+        String(cleanHeaders[contentTypeHeader]).toLowerCase().includes('multipart/form-data')) {
       // Create boundary and build multipart form body
       const boundary = '----WebKitFormBoundaryPostmanClone' + Math.random().toString(36).substring(2);
-      cleanHeaders['content-type'] = `multipart/form-data; boundary=${boundary}`;
+      cleanHeaders[contentTypeHeader] = `multipart/form-data; boundary=${boundary}`;
       
       let multipartBody = '';
       if (Array.isArray(body)) {

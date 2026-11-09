@@ -8,6 +8,16 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:ital,wght@0,400;0,700;1,700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script>
+        (() => {
+            const theme = localStorage.getItem('expresspost_theme');
+            const accent = localStorage.getItem('expresspost_accent');
+            const density = localStorage.getItem('expresspost_density');
+            if (['dark', 'midnight', 'light'].includes(theme)) document.documentElement.dataset.theme = theme;
+            if (accent && /^#[\da-f]{6}$/i.test(accent)) document.documentElement.style.setProperty('--primary', accent);
+            document.documentElement.dataset.density = ['comfortable', 'compact'].includes(density) ? density : 'compact';
+        })();
+    </script>
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
@@ -17,18 +27,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7/ext-language_tools.min.js" type="text/javascript" charset="utf-8"></script>
 </head>
 <body>
-    <div class="xp-title-bar">
-        <div class="xp-title-bar-text">
-            <img src="logo.png" alt="ExpressPost Logo" style="height: 18px; width: 18px; margin-right: 6px; border-radius: 2px; vertical-align: middle;">
-            <span style="font-family: 'Outfit', sans-serif; font-style: italic; font-weight: 700; font-size: 14px;">ExpressPost</span> - Premium API Client
-        </div>
-    </div>
     <div class="app-container">
         <!-- Sidebar Navigation -->
         <aside class="sidebar">
             <div class="sidebar-header">
                 <div class="logo">
-                    <img src="logo.png" alt="ExpressPost Logo" style="height: 28px; width: 28px; margin-right: 8px; border-radius: 4px; vertical-align: middle;">
                     <span class="logo-text" style="font-family: 'Outfit', sans-serif; font-style: italic;">ExpressPost</span>
                 </div>
                 <div class="env-selector-container">
@@ -38,29 +41,33 @@
                     <button id="quick-env-manage" class="icon-btn" title="Manage Environments" aria-label="Manage Environments">
                         <i class="fa-solid fa-gear"></i>
                     </button>
+                    <button id="btn-open-appearance" class="icon-btn" title="Appearance settings" aria-label="Appearance settings" aria-haspopup="dialog" aria-controls="appearance-modal">
+                        <i class="fa-solid fa-palette"></i>
+                    </button>
                 </div>
             </div>
 
             <div class="sidebar-nav-tabs">
-                <button class="nav-tab active" data-tab="collections">
-                    <i class="fa-solid fa-folder"></i> Collections
+                <button class="nav-tab active" data-tab="collections" title="Collections" aria-label="Collections">
+                    <i class="fa-solid fa-folder"></i>
                 </button>
-                <button class="nav-tab" data-tab="environments">
-                    <i class="fa-solid fa-database"></i> Environments
+                <button class="nav-tab" data-tab="environments" title="Environments" aria-label="Environments">
+                    <i class="fa-solid fa-database"></i>
                 </button>
-                <button class="nav-tab" data-tab="history">
-                    <i class="fa-solid fa-clock-rotate-left"></i> History
+                <button class="nav-tab" data-tab="history" title="History" aria-label="History">
+                    <i class="fa-solid fa-clock-rotate-left"></i>
                 </button>
-                <button class="nav-tab" data-tab="mocks">
-                    <i class="fa-solid fa-server"></i> Mocks
+                <button class="nav-tab" data-tab="mocks" title="Mocks" aria-label="Mocks">
+                    <i class="fa-solid fa-server"></i>
                 </button>
             </div>
 
             <div class="sidebar-content">
                 <!-- Collections Tab -->
                 <div class="sidebar-pane active" id="pane-collections">
+                    <div class="sidebar-pane-heading">COLLECTIONS</div>
                     <div class="pane-actions">
-                        <button id="btn-new-collection" class="btn btn-sm btn-primary">
+                        <button id="btn-new-collection" class="btn btn-sm btn-primary" title="Create collection" aria-label="Create collection">
                             <i class="fa-solid fa-plus"></i> New Collection
                         </button>
                         <button id="btn-import-collection" class="btn btn-sm btn-secondary" title="Import Postman Collection">
@@ -79,6 +86,7 @@
 
                 <!-- Environments Tab -->
                 <div class="sidebar-pane" id="pane-environments">
+                    <div class="sidebar-pane-heading">ENVIRONMENTS</div>
                     <div class="pane-actions">
                         <button id="btn-new-env" class="btn btn-sm btn-primary">
                             <i class="fa-solid fa-plus"></i> Add Environment
@@ -94,6 +102,7 @@
 
                 <!-- History Tab -->
                 <div class="sidebar-pane" id="pane-history">
+                    <div class="sidebar-pane-heading">HISTORY</div>
                     <div class="pane-actions">
                         <button id="btn-clear-history" class="btn btn-sm btn-danger w-100">
                             <i class="fa-solid fa-trash-can"></i> Clear History
@@ -106,6 +115,7 @@
 
                 <!-- Mocks Tab -->
                 <div class="sidebar-pane" id="pane-mocks">
+                    <div class="sidebar-pane-heading">MOCK SERVERS</div>
                     <div class="pane-actions">
                         <button id="btn-new-mock" class="btn btn-sm btn-primary">
                             <i class="fa-solid fa-plus"></i> New Mock
@@ -166,7 +176,7 @@
                             <option value="HEAD">HEAD</option>
                         </select>
                         <input type="text" id="request-url" placeholder="https://api.example.com/endpoint" class="url-input" autocomplete="off">
-                        <div class="engine-toggle" title="Direct makes request from browser. Proxy passes through Node.js to bypass CORS.">
+                        <div class="engine-toggle" title="Direct sends from your browser and requires the API server to allow this app origin via CORS. Proxy sends through the local Node.js server and avoids browser CORS restrictions.">
                             <select id="request-engine" class="engine-select">
                                 <option value="proxy">Proxy Mode</option>
                                 <option value="direct">Direct Mode</option>
@@ -189,12 +199,12 @@
                     <!-- Request Configuration Tabs -->
                     <div class="config-tabs-container">
                         <div class="config-tabs">
-                            <button class="config-tab active" data-config="params">Params</button>
-                            <button class="config-tab" data-config="auth">Authorization</button>
-                            <button class="config-tab" data-config="headers">Headers (<span id="header-badge-count">0</span>)</button>
-                            <button class="config-tab" data-config="body">Body</button>
-                            <button class="config-tab" data-config="pre-request">Pre-request Script</button>
-                            <button class="config-tab" data-config="tests">Tests</button>
+                            <button class="config-tab active" data-config="params" title="Query parameters" aria-label="Query parameters"><i class="fa-solid fa-list-ul"></i></button>
+                            <button class="config-tab" data-config="auth" title="Authorization" aria-label="Authorization"><i class="fa-solid fa-lock"></i></button>
+                            <button class="config-tab" data-config="headers" title="Headers" aria-label="Headers"><i class="fa-solid fa-list"></i><span id="header-badge-count">0</span></button>
+                            <button class="config-tab" data-config="body" title="Request body" aria-label="Request body"><i class="fa-solid fa-file-lines"></i></button>
+                            <button class="config-tab" data-config="pre-request" title="Pre-request script" aria-label="Pre-request script"><i class="fa-solid fa-code"></i></button>
+                            <button class="config-tab" data-config="tests" title="Post-response tests" aria-label="Post-response tests"><i class="fa-solid fa-vial"></i></button>
                         </div>
 
                         <div class="config-panes">
@@ -230,6 +240,7 @@
                                             <option value="bearer">Bearer Token</option>
                                             <option value="basic">Basic Auth</option>
                                             <option value="apikey">API Key</option>
+                                            <option value="oauth2">OAuth 2.0</option>
                                         </select>
                                     </div>
                                     <div class="auth-fields" id="auth-fields-container">
@@ -272,6 +283,60 @@
                                                     <option value="query">Query Params</option>
                                                 </select>
                                             </div>
+                                        </div>
+
+                                        <div class="auth-form-fields hidden" id="auth-oauth2-fields">
+                                            <div class="form-group">
+                                                <label for="oauth-grant-type">Grant Type</label>
+                                                <select id="oauth-grant-type" class="form-control">
+                                                    <option value="client_credentials">Client Credentials</option>
+                                                    <option value="authorization_code_pkce">Authorization Code (PKCE)</option>
+                                                    <option value="authorization_code">Authorization Code</option>
+                                                    <option value="password">Password (legacy)</option>
+                                                </select>
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="oauth-client-id">Client ID</label>
+                                                <input type="text" id="oauth-client-id" class="form-control code-font">
+                                            </div>
+                                            <div class="form-group" id="oauth-client-secret-group">
+                                                <label for="oauth-client-secret">Client Secret</label>
+                                                <input type="password" id="oauth-client-secret" class="form-control">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="oauth-token-url">Token URL</label>
+                                                <input type="url" id="oauth-token-url" class="form-control code-font" placeholder="https://identity.example.com/oauth2/token">
+                                            </div>
+                                            <div class="form-group hidden" id="oauth-authorization-url-group">
+                                                <label for="oauth-authorization-url">Authorization URL</label>
+                                                <input type="url" id="oauth-authorization-url" class="form-control code-font">
+                                            </div>
+                                            <div class="form-group hidden" id="oauth-redirect-url-group">
+                                                <label for="oauth-redirect-url">Redirect URI</label>
+                                                <input type="url" id="oauth-redirect-url" class="form-control code-font" placeholder="Defaults to this app's callback URL">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="oauth-scope">Scope</label>
+                                                <input type="text" id="oauth-scope" class="form-control">
+                                            </div>
+                                            <div class="form-group" id="oauth-client-auth-group">
+                                                <label for="oauth-client-auth">Client Authentication</label>
+                                                <select id="oauth-client-auth" class="form-control">
+                                                    <option value="body">Send credentials in body</option>
+                                                    <option value="basic">Send credentials with Basic Auth</option>
+                                                </select>
+                                            </div>
+                                            <div class="form-group hidden" id="oauth-password-group">
+                                                <label for="oauth-username">Username</label>
+                                                <input type="text" id="oauth-username" class="form-control">
+                                                <label for="oauth-password">Password</label>
+                                                <input type="password" id="oauth-password" class="form-control">
+                                            </div>
+                                            <div class="form-group">
+                                                <button type="button" class="btn btn-secondary" id="btn-oauth-get-token">Get New Access Token</button>
+                                                <span id="oauth-token-status" class="help-text"></span>
+                                            </div>
+                                            <p class="help-text">OAuth credentials and tokens are kept for this browser session only. Register the displayed callback URI with your identity provider.</p>
                                         </div>
                                     </div>
                                 </div>
@@ -378,26 +443,37 @@
                             <div class="config-pane" id="config-pane-pre-request">
                                 <div class="script-header">
                                     <h3>Pre-request Script</h3>
-                                    <p class="script-desc">Write JavaScript to run before this request. Use <code>pm.environment.set()</code> to set dynamic variables.</p>
+                                    <p class="script-desc">Runs before the request. Set variables or update <code>pm.request.url</code>, <code>pm.request.headers</code>, and the body.</p>
                                 </div>
-                                <div id="pre-request-editor" class="ace-editor-container script-editor"></div>
+                                <div class="script-layout">
+                                    <div id="pre-request-editor" class="ace-editor-container script-editor"></div>
+                                    <div class="script-snippets">
+                                        <h4>Pre-request helpers</h4>
+                                        <button class="snippet-btn" data-snippet-target="pre-request" data-snippet="set-env">Set environment variable</button>
+                                        <button class="snippet-btn" data-snippet-target="pre-request" data-snippet="set-global">Set global variable</button>
+                                        <button class="snippet-btn" data-snippet-target="pre-request" data-snippet="timestamp">Create timestamp</button>
+                                        <button class="snippet-btn" data-snippet-target="pre-request" data-snippet="random-id">Create random ID</button>
+                                        <button class="snippet-btn" data-snippet-target="pre-request" data-snippet="add-header">Add request header</button>
+                                    </div>
+                                </div>
                             </div>
 
                             <!-- Tests Pane -->
                             <div class="config-pane" id="config-pane-tests">
                                 <div class="script-header">
-                                    <h3>Test Scripts</h3>
-                                    <p class="script-desc">Write assertions to run after the response is received. Example: <code>pm.test("Status is 200", () => { pm.response.to.have.status(200); });</code></p>
+                                    <h3>Post-response Script</h3>
+                                    <p class="script-desc">Runs after the response. Assert status, headers, body, and response time; use <code>pm.test()</code> and <code>pm.expect()</code>.</p>
                                 </div>
                                 <div class="script-layout">
                                     <div id="tests-editor" class="ace-editor-container script-editor"></div>
                                     <div class="script-snippets">
-                                        <h4>Test Snippets</h4>
-                                        <button class="snippet-btn" data-snippet="status-200">Status code is 200</button>
-                                        <button class="snippet-btn" data-snippet="json-val">Response body: JSON value check</button>
-                                        <button class="snippet-btn" data-snippet="contains-string">Response body: Contains string</button>
-                                        <button class="snippet-btn" data-snippet="set-env">Set environment variable</button>
-                                        <button class="snippet-btn" data-snippet="response-time">Response time is less than 200ms</button>
+                                        <h4>Post-response helpers</h4>
+                                        <button class="snippet-btn" data-snippet-target="tests" data-snippet="status-200">Assert status is 200</button>
+                                        <button class="snippet-btn" data-snippet-target="tests" data-snippet="json-val">Assert JSON property</button>
+                                        <button class="snippet-btn" data-snippet-target="tests" data-snippet="contains-string">Assert body contains text</button>
+                                        <button class="snippet-btn" data-snippet-target="tests" data-snippet="set-env">Save response token</button>
+                                        <button class="snippet-btn" data-snippet-target="tests" data-snippet="response-time">Assert response time</button>
+                                        <button class="snippet-btn" data-snippet-target="tests" data-snippet="content-type">Assert JSON content type</button>
                                     </div>
                                 </div>
                             </div>
@@ -428,9 +504,9 @@
                     <div class="response-content hidden" id="response-content-area">
                         <div class="response-tabs-bar">
                             <div class="response-tabs">
-                                <button class="response-tab active" data-resp-tab="body">Body</button>
-                                <button class="response-tab" data-resp-tab="headers">Headers</button>
-                                <button class="response-tab" data-resp-tab="results">Test Results (<span id="test-pass-badge">0/0</span>)</button>
+                                <button class="response-tab active" data-resp-tab="body" title="Response body" aria-label="Response body"><i class="fa-solid fa-file-lines"></i></button>
+                                <button class="response-tab" data-resp-tab="headers" title="Response headers" aria-label="Response headers"><i class="fa-solid fa-list"></i></button>
+                                <button class="response-tab" data-resp-tab="results" title="Test results" aria-label="Test results"><i class="fa-solid fa-vial"></i><span id="test-pass-badge">0/0</span></button>
                             </div>
                             <div class="response-body-format-controls hidden" id="resp-body-controls">
                                 <button class="icon-btn" id="btn-copy-response" title="Copy Response" aria-label="Copy Response" style="margin-right: 8px;"><i class="fa-solid fa-copy"></i></button>
@@ -486,6 +562,43 @@
                 </div>
             </div>
         </main>
+    </div>
+
+    <div class="modal-overlay hidden" id="appearance-modal">
+        <section class="appearance-dialog" role="dialog" aria-modal="true" aria-labelledby="appearance-title">
+            <header class="modal-header">
+                <h2 id="appearance-title">Appearance</h2>
+                <button class="modal-close-btn" id="btn-close-appearance" aria-label="Close Appearance Settings">&times;</button>
+            </header>
+            <div class="appearance-body">
+                <div class="form-group">
+                    <label for="appearance-theme">Theme</label>
+                    <select id="appearance-theme" class="form-control">
+                        <option value="dark">Dark</option>
+                        <option value="midnight">Midnight</option>
+                        <option value="light">Light</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="appearance-accent">Accent color</label>
+                    <div class="appearance-accent-row">
+                        <input type="color" id="appearance-accent" aria-label="Choose accent color">
+                        <button class="btn btn-sm btn-secondary" id="btn-reset-accent">Reset color</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="appearance-density">Layout density</label>
+                    <select id="appearance-density" class="form-control">
+                        <option value="comfortable">Comfortable</option>
+                        <option value="compact">Compact</option>
+                    </select>
+                </div>
+                <p class="help-text">Your appearance preferences are saved in this browser.</p>
+            </div>
+            <footer class="modal-footer">
+                <button class="btn btn-primary" id="btn-done-appearance">Done</button>
+            </footer>
+        </section>
     </div>
 
     <!-- Environments Modal -->
@@ -579,10 +692,12 @@
     <div class="runner-overlay hidden" id="runner-view">
         <header class="xp-title-bar">
             <div class="xp-title-bar-text">
-                <i class="fa-solid fa-circle-play text-accent"></i>
                 <span><span style="font-family: 'Outfit', sans-serif; font-style: italic; font-weight: 700;">ExpressPost</span> - Collection Runner</span>
             </div>
             <div class="xp-title-bar-controls">
+                <button id="btn-open-appearance-runner" class="xp-control-btn" title="Appearance settings" aria-label="Appearance settings" aria-haspopup="dialog" aria-controls="appearance-modal">
+                    <i class="fa-solid fa-palette"></i>
+                </button>
                 <button id="btn-close-runner" class="xp-control-btn close" title="Close Runner">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
@@ -592,24 +707,24 @@
         <div class="runner-container">
             <!-- Left Config Sidebar -->
             <aside class="runner-config-panel">
-                <h3>Run Configurations</h3>
-                
-                <div class="runner-config-grid">
-                    <div class="form-group">
+                <div class="runner-config-scroll">
+                    <h3>Run Configurations</h3>
+                    <div class="runner-config-grid">
+                    <div class="form-group runner-field-full">
                         <label for="runner-select-collection">Choose a Collection</label>
                         <select id="runner-select-collection" class="form-control">
                             <!-- Dynamic options -->
                         </select>
                     </div>
 
-                    <div id="runner-request-list" class="runner-request-list card hidden" style="grid-column: 1 / -1; padding: 12px; margin-bottom: 0;">
+                    <div id="runner-request-list" class="runner-request-list card runner-field-full hidden">
                         <h4 style="margin: 0 0 8px 0; font-size: 13px; color: var(--text-main); font-weight: 600;">Requests to Run</h4>
                         <div id="runner-request-checklist" class="checklist-container">
                             <!-- Dynamic checkboxes -->
                         </div>
                     </div>
 
-                    <div class="form-group">
+                    <div class="form-group runner-field-half">
                         <label for="runner-select-env">Environment</label>
                         <select id="runner-select-env" class="form-control">
                             <option value="globals">No Environment</option>
@@ -618,54 +733,64 @@
                     </div>
 
                     <!-- Data File Upload Section -->
-                    <div class="data-file-section card" style="grid-column: 1 / -1; padding: 12px; margin-bottom: 0;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                            <h4 style="margin: 0;">Data File (Optional)</h4>
-                            <div id="runner-data-info" class="help-text hidden" style="margin: 0; font-weight: 500;">
+                    <details class="data-file-section card runner-field-full">
+                        <summary class="runner-disclosure-summary">
+                            <span><i class="fa-solid fa-file-import"></i> Data file <span class="help-text">(optional)</span></span>
+                            <span id="runner-data-info" class="help-text hidden" style="margin: 0; font-weight: 500;">
                                 <span id="runner-data-filename" class="text-accent" style="margin-right: 4px;"></span> 
                                 (<span id="runner-data-rows">0</span> iterations loaded)
-                            </div>
-                        </div>
+                            </span>
+                        </summary>
                         <div class="form-group mb-0">
                             <label for="runner-data-file" class="btn btn-secondary w-100" style="border-style: dashed; padding: 12px; font-weight: normal; font-size: 13px;">
                                 <i class="fa-solid fa-file-import"></i> Select CSV or JSON File
                             </label>
                             <input type="file" id="runner-data-file" accept=".csv,.json" class="hidden">
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="form-group">
+                    <div class="form-group runner-field-half">
                         <label for="runner-iterations">Iterations</label>
                         <input type="number" id="runner-iterations" class="form-control" value="1" min="1">
                     </div>
                     
-                    <div class="form-group">
+                    <div class="form-group runner-field-half">
                         <label for="runner-delay">Delay (ms)</label>
                         <input type="number" id="runner-delay" class="form-control" value="0" min="0">
                     </div>
-                </div>
-
-                <!-- Multithreading Configuration -->
-                <div class="multithreading-settings card mt-0">
-                    <h4>Concurrency & Multithreading</h4>
-                    <div class="form-group">
-                        <label>Execution Mode</label>
-                        <div class="toggle-group">
-                            <label class="radio-label">
-                                <input type="radio" name="runner-mode" value="sequential" checked>
-                                <span>Sequential</span>
-                            </label>
-                            <label class="radio-label" title="Utilizes parallel Web Workers to execute multiple API calls simultaneously">
-                                <input type="radio" name="runner-mode" value="parallel">
-                                <span>Parallel</span>
-                            </label>
-                        </div>
+                    <div class="form-group runner-field-full">
+                        <label for="runner-engine">Request Mode</label>
+                        <select id="runner-engine" class="form-control">
+                            <option value="proxy">Proxy Mode</option>
+                            <option value="direct">Direct Mode</option>
+                        </select>
+                        <p class="help-text">Direct Mode is subject to browser CORS. Proxy Mode sends requests through this app's local server.</p>
                     </div>
-                    <div class="form-group hidden" id="runner-thread-setting" style="margin-top: 8px;">
-                        <label for="runner-threads">Execution Threads (Workers)</label>
-                        <div class="slider-container">
-                            <input type="range" id="runner-threads" min="1" max="100" value="10" class="slider">
-                            <span id="runner-threads-val" class="slider-value">10 Threads</span>
+                    </div>
+
+                    <!-- Multithreading Configuration -->
+                    <div class="multithreading-settings card mt-0">
+                        <h4>Concurrency & Multithreading</h4>
+                        <div class="form-group">
+                            <label>Execution Mode</label>
+                            <div class="toggle-group">
+                                <label class="radio-label">
+                                    <input type="radio" name="runner-mode" value="sequential" checked>
+                                    <span>Sequential</span>
+                                </label>
+                                <label class="radio-label" title="Utilizes parallel Web Workers to execute multiple API calls simultaneously">
+                                    <input type="radio" name="runner-mode" value="parallel">
+                                    <span>Parallel</span>
+                                </label>
+                            </div>
+                            <p class="help-text">Use Sequential for token handoffs. Parallel requests use separate variable snapshots and cannot depend on one another.</p>
+                        </div>
+                        <div class="form-group hidden" id="runner-thread-setting" style="margin-top: 8px;">
+                            <label for="runner-threads">Execution Threads (Workers)</label>
+                            <div class="slider-container">
+                                <input type="range" id="runner-threads" min="1" max="100" value="10" class="slider">
+                                <span id="runner-threads-val" class="slider-value">10 Threads</span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -771,8 +896,8 @@
 
     <!-- Core App JS Scripts -->
     <script src="sandbox.js"></script>
-    <script src="runner.js?v=2"></script>
+    <script src="runner.js?v=3"></script>
     <script src="snippets.js"></script>
-    <script src="app.js?v=2"></script>
+    <script src="app.js?v=3"></script>
 </body>
 </html>

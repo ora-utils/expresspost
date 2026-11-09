@@ -9,11 +9,11 @@ importScripts('sandbox.js');
 
 // Listen for execution commands from the main thread
 self.onmessage = async function(e) {
-  const { action, request, globals, environment, proxyUrl, engine } = e.data;
+  const { action, request, globals, environment, proxyUrl, engine, iterationData } = e.data;
 
   if (action === 'run_request') {
     try {
-      const result = await executeRequestInWorker(request, globals, environment, proxyUrl, engine);
+      const result = await executeRequestInWorker(request, globals, environment, proxyUrl, engine, iterationData);
       self.postMessage({ status: 'success', result });
     } catch (error) {
       self.postMessage({
@@ -28,37 +28,66 @@ self.onmessage = async function(e) {
 /**
  * Executes a single API request, running pre-request and post-response assertion scripts
  */
-async function executeRequestInWorker(req, globals, environment, proxyUrl, engine) {
+async function executeRequestInWorker(req, globals, environment, proxyUrl, engine, iterationData = {}) {
   let requestGlobals = { ...globals };
   let requestEnv = { ...environment };
+  let requestCollectionVariables = { ...(req.collectionVariables || {}) };
+  let requestLocalVariables = {};
+  let requestUrl = req.url;
+  let requestMethod = req.method;
+  let requestBodyType = req.bodyType;
+  let requestHeaders = getHeadersObject(req.headers);
+  let preRequestResults = [];
+  let requestBody = requestBodyType === 'form-data'
+    ? (req.formdata || req.formData || [])
+    : requestBodyType === 'urlencoded'
+      ? (req.urlencoded || [])
+      : req.body;
 
   // 1. Run Pre-request Script
   let preRequestLogs = [];
   if (req.preRequestScript && req.preRequestScript.trim() !== '') {
-    const preSandboxResult = runScriptSandbox(req.preRequestScript, {
+    const preSandboxResult = await runScriptSandbox(req.preRequestScript, {
       globals: requestGlobals,
       environment: requestEnv,
+      collectionVariables: requestCollectionVariables,
+      localVariables: requestLocalVariables,
+      iterationData,
+      sendRequest: options => executeScriptRequest(options, engine, proxyUrl),
       request: {
-        url: req.url,
-        method: req.method,
-        headers: getHeadersObject(req.headers),
-        body: req.body
+        url: requestUrl,
+        method: requestMethod,
+        headers: requestHeaders,
+        body: requestBody,
+        bodyType: requestBodyType
       }
     });
     
     // Capture mutations
     requestGlobals = preSandboxResult.globals;
     requestEnv = preSandboxResult.environment;
+    requestCollectionVariables = preSandboxResult.collectionVariables;
+    requestLocalVariables = preSandboxResult.localVariables;
+    preRequestResults = preSandboxResult.testResults;
+    requestUrl = preSandboxResult.request.url || requestUrl;
+    requestMethod = preSandboxResult.request.method || requestMethod;
+    requestHeaders = preSandboxResult.request.headers || requestHeaders;
+    requestBody = preSandboxResult.request.body;
+    requestBodyType = preSandboxResult.request.bodyType || requestBodyType;
     preRequestLogs = preSandboxResult.logs;
   }
 
   // 2. Resolve Variables
-  const resolvedUrl = resolveVariables(req.url, requestGlobals, requestEnv);
-  const resolvedHeaders = resolveHeaders(req.headers, requestGlobals, requestEnv);
-  const resolvedBody = resolveRequestBody(req.body, req.bodyType, requestGlobals, requestEnv);
+  let resolvedUrl = resolveVariables(requestUrl, requestGlobals, requestEnv, requestLocalVariables, requestCollectionVariables);
+  const resolvedHeaders = resolveHeaders(requestHeaders, requestGlobals, requestEnv, requestLocalVariables, requestCollectionVariables);
+  const resolvedBody = resolveRequestBody(requestBody, requestBodyType, requestGlobals, requestEnv, requestLocalVariables, requestCollectionVariables);
 
   // 3. Inject Authorization
-  injectAuthorization(req.auth, resolvedHeaders, resolvedUrl, requestGlobals, requestEnv);
+  resolvedUrl = injectAuthorization(req.auth, resolvedHeaders, resolvedUrl, requestGlobals, {
+    ...requestEnv,
+    ...requestCollectionVariables,
+    ...requestLocalVariables
+  });
 
   // 4. Send HTTP Request (Direct or Proxy Mode)
   let responseData = null;
@@ -66,9 +95,9 @@ async function executeRequestInWorker(req, globals, environment, proxyUrl, engin
 
   try {
     if (engine === 'proxy') {
-      responseData = await executeProxyRequest(proxyUrl, req.method, resolvedUrl, resolvedHeaders, resolvedBody, req.bodyType);
+      responseData = await executeProxyRequest(proxyUrl, requestMethod, resolvedUrl, resolvedHeaders, resolvedBody, requestBodyType);
     } else {
-      responseData = await executeDirectRequest(req.method, resolvedUrl, resolvedHeaders, resolvedBody, req.bodyType);
+      responseData = await executeDirectRequest(requestMethod, resolvedUrl, resolvedHeaders, resolvedBody, requestBodyType);
     }
   } catch (err) {
     // Return connection failure representation
@@ -84,14 +113,18 @@ async function executeRequestInWorker(req, globals, environment, proxyUrl, engin
 
   // 5. Run Test Scripts
   let testLogs = [];
-  let testResults = [];
+  let testResults = preRequestResults;
   if (req.testsScript && req.testsScript.trim() !== '') {
-    const testSandboxResult = runScriptSandbox(req.testsScript, {
+    const testSandboxResult = await runScriptSandbox(req.testsScript, {
       globals: requestGlobals,
       environment: requestEnv,
+      collectionVariables: requestCollectionVariables,
+      localVariables: requestLocalVariables,
+      iterationData,
+      sendRequest: options => executeScriptRequest(options, engine, proxyUrl),
       request: {
         url: resolvedUrl,
-        method: req.method,
+        method: requestMethod,
         headers: resolvedHeaders,
         body: typeof resolvedBody === 'string' ? resolvedBody : JSON.stringify(resolvedBody)
       },
@@ -101,18 +134,21 @@ async function executeRequestInWorker(req, globals, environment, proxyUrl, engin
     // Capture mutations & outputs
     requestGlobals = testSandboxResult.globals;
     requestEnv = testSandboxResult.environment;
+    requestCollectionVariables = testSandboxResult.collectionVariables;
+    requestLocalVariables = testSandboxResult.localVariables;
     testLogs = testSandboxResult.logs;
-    testResults = testSandboxResult.testResults;
+    testResults.push(...testSandboxResult.testResults);
   }
 
   return {
     requestId: req.id,
     requestName: req.name,
-    method: req.method,
+    method: requestMethod,
     url: resolvedUrl,
     requestBody: typeof resolvedBody === 'string' ? resolvedBody : JSON.stringify(resolvedBody),
     globals: requestGlobals,
     environment: requestEnv,
+    collectionVariables: requestCollectionVariables,
     logs: [...preRequestLogs, ...testLogs],
     testResults: testResults,
     response: responseData
@@ -122,11 +158,13 @@ async function executeRequestInWorker(req, globals, environment, proxyUrl, engin
 /**
  * Replaces double curly brace variables {{my_var}} in strings
  */
-function resolveVariables(str, globals, environment) {
+function resolveVariables(str, globals, environment, localVariables = {}, collectionVariables = {}) {
   if (typeof str !== 'string') return str;
   return str.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
     const trimmedKey = key.trim();
+    if (trimmedKey in localVariables) return localVariables[trimmedKey];
     if (trimmedKey in environment) return environment[trimmedKey];
+    if (trimmedKey in collectionVariables) return collectionVariables[trimmedKey];
     if (trimmedKey in globals) return globals[trimmedKey];
     return match;
   });
@@ -150,15 +188,20 @@ function getHeadersObject(headersArray) {
 /**
  * Resolves headers list keys & values
  */
-function resolveHeaders(headersArray, globals, environment) {
+function resolveHeaders(headersArray, globals, environment, localVariables = {}, collectionVariables = {}) {
   const headers = {};
   if (Array.isArray(headersArray)) {
     headersArray.forEach(h => {
       if (h.enabled !== false && h.key) {
-        const resolvedKey = resolveVariables(h.key, globals, environment);
-        const resolvedVal = resolveVariables(h.value || '', globals, environment);
+        const resolvedKey = resolveVariables(h.key, globals, environment, localVariables, collectionVariables);
+        const resolvedVal = resolveVariables(h.value || '', globals, environment, localVariables, collectionVariables);
         headers[resolvedKey] = resolvedVal;
       }
+    });
+  } else {
+    Object.entries(headersArray || {}).forEach(([key, value]) => {
+      headers[resolveVariables(key, globals, environment, localVariables, collectionVariables)] =
+        resolveVariables(value || '', globals, environment, localVariables, collectionVariables);
     });
   }
   return headers;
@@ -167,11 +210,11 @@ function resolveHeaders(headersArray, globals, environment) {
 /**
  * Resolves body parameters and structures form data or urlencoded inputs
  */
-function resolveRequestBody(body, bodyType, globals, environment) {
+function resolveRequestBody(body, bodyType, globals, environment, localVariables = {}, collectionVariables = {}) {
   if (bodyType === 'none') return null;
 
   if (bodyType === 'raw') {
-    return resolveVariables(body || '', globals, environment);
+    return resolveVariables(body || '', globals, environment, localVariables, collectionVariables);
   }
 
   // Handle key-value body types (form-data, urlencoded)
@@ -180,8 +223,8 @@ function resolveRequestBody(body, bodyType, globals, environment) {
     body.forEach(item => {
       if (item.enabled !== false && item.key) {
         resolvedFields.push({
-          key: resolveVariables(item.key, globals, environment),
-          value: resolveVariables(item.value || '', globals, environment),
+          key: resolveVariables(item.key, globals, environment, localVariables, collectionVariables),
+          value: resolveVariables(item.value || '', globals, environment, localVariables, collectionVariables),
           type: item.type || 'text',
           fileName: item.fileName || '',
           fileData: item.fileData || ''
@@ -198,7 +241,7 @@ function resolveRequestBody(body, bodyType, globals, environment) {
  * Injects basic, bearer, or apikey credentials into request headers or url
  */
 function injectAuthorization(auth, headers, url, globals, environment) {
-  if (!auth || auth.type === 'none') return;
+  if (!auth || auth.type === 'none') return url;
 
   if (auth.type === 'bearer' && auth.bearerToken) {
     const token = resolveVariables(auth.bearerToken, globals, environment);
@@ -211,6 +254,10 @@ function injectAuthorization(auth, headers, url, globals, environment) {
     const hash = btoa(`${username}:${password}`);
     headers['Authorization'] = `Basic ${hash}`;
   } 
+  else if (auth.type === 'oauth2') {
+    if (!auth.oauthAccessToken) throw new Error('OAuth access token is missing. Get a token before starting the runner.');
+    headers.Authorization = `Bearer ${auth.oauthAccessToken}`;
+  }
   
   else if (auth.type === 'apikey' && auth.key) {
     const key = resolveVariables(auth.key, globals, environment);
@@ -219,16 +266,12 @@ function injectAuthorization(auth, headers, url, globals, environment) {
     if (auth.in === 'header') {
       headers[key] = value;
     } else {
-      // Query parameters injection
-      // Since it's a worker, we manipulate the URL string
       const urlObj = new URL(url);
       urlObj.searchParams.set(key, value);
-      // We modify URL inside this function by reference if possible? 
-      // JavaScript strings are immutable, so we'll need to mutate it manually.
-      // But standard approach: since URL object cannot be mutated from outer scope easily,
-      // we can do:
+      url = urlObj.toString();
     }
   }
+  return url;
 }
 
 /**
@@ -236,9 +279,10 @@ function injectAuthorization(auth, headers, url, globals, environment) {
  */
 async function executeProxyRequest(proxyUrl, method, url, headers, body, bodyType) {
   // Set content-type automatically if missing and body exists
-  if (bodyType === 'raw' && !headers['content-type']) {
+  const hasContentType = Object.keys(headers).some(key => key.toLowerCase() === 'content-type');
+  if (bodyType === 'raw' && !hasContentType) {
     headers['content-type'] = 'application/json';
-  } else if (bodyType === 'urlencoded' && !headers['content-type']) {
+  } else if (bodyType === 'urlencoded' && !hasContentType) {
     headers['content-type'] = 'application/x-www-form-urlencoded';
   }
 
@@ -270,6 +314,41 @@ async function executeProxyRequest(proxyUrl, method, url, headers, body, bodyTyp
   return await response.json();
 }
 
+async function executeScriptRequest(options, engine, proxyUrl) {
+  const request = typeof options === 'string' ? { url: options } : options;
+  const url = typeof request.url === 'string' ? request.url : request.url && request.url.raw;
+  const method = String(request.method || 'GET').toUpperCase();
+  const headers = Array.isArray(request.header)
+    ? request.header.reduce((result, header) => {
+      if (header.key && header.disabled !== true) result[header.key] = header.value || '';
+      return result;
+    }, {})
+    : { ...(request.headers || request.header || {}) };
+  let body = request.body;
+  let bodyType = body == null ? 'none' : 'raw';
+  if (body && typeof body === 'object') {
+    if (body.mode === 'urlencoded') {
+      body = body.urlencoded || [];
+      bodyType = 'urlencoded';
+    } else if (body.mode === 'formdata') {
+      body = body.formdata || [];
+      bodyType = 'form-data';
+      if (!Object.keys(headers).some(key => key.toLowerCase() === 'content-type')) {
+        headers['Content-Type'] = 'multipart/form-data';
+      }
+    } else {
+      body = body.raw;
+      bodyType = body == null ? 'none' : 'raw';
+    }
+  }
+
+  if (!url) throw new Error('pm.sendRequest requires a URL.');
+  if (engine === 'proxy') {
+    return executeProxyRequest(proxyUrl, method, url, headers, body, bodyType);
+  }
+  return executeDirectRequest(method, url, headers, body, bodyType);
+}
+
 /**
  * Performs request directly from Web Worker browser environment
  */
@@ -281,7 +360,7 @@ async function executeDirectRequest(method, url, headers, body, bodyType) {
 
   if (bodyType === 'raw' && body) {
     fetchOptions.body = body;
-    if (!headers['content-type']) {
+    if (!Object.keys(headers).some(key => key.toLowerCase() === 'content-type')) {
       fetchOptions.headers.set('Content-Type', 'application/json');
     }
   } else if (bodyType === 'urlencoded' && Array.isArray(body)) {

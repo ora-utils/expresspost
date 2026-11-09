@@ -134,7 +134,26 @@ function loadCollections() {
 }
 
 function saveCollections() {
-  localStorage.setItem('collections', JSON.stringify(collections));
+  localStorage.setItem('collections', JSON.stringify(stripOAuthSecrets(collections)));
+}
+
+function stripOAuthSecrets(value) {
+  if (Array.isArray(value)) return value.map(stripOAuthSecrets);
+  if (!value || typeof value !== 'object') return value;
+
+  const sanitized = {};
+  Object.entries(value).forEach(([key, item]) => {
+    if (value.type === 'oauth2' && [
+      'oauthClientSecret',
+      'oauthUsername',
+      'oauthPassword',
+      'oauthAccessToken',
+      'oauthRefreshToken',
+      'oauthExpiresAt'
+    ].includes(key)) return;
+    sanitized[key] = stripOAuthSecrets(item);
+  });
+  return sanitized;
 }
 
 function loadEnvironments() {
@@ -206,6 +225,7 @@ function renderCollections() {
         </div>
         <div class="coll-folder-actions">
           <button class="icon-btn btn-add-req-to-coll" data-id="${coll.id}" title="Add Request"><i class="fa-solid fa-file-circle-plus"></i></button>
+          <button class="icon-btn btn-export-coll" data-id="${coll.id}" title="Export Collection (credentials omitted)"><i class="fa-solid fa-file-export"></i></button>
           <button class="icon-btn btn-run-coll-direct" data-id="${coll.id}" title="Run Collection"><i class="fa-solid fa-circle-play"></i></button>
           <button class="icon-btn btn-delete-coll" data-id="${coll.id}" title="Delete Collection"><i class="fa-solid fa-trash-can"></i></button>
         </div>
@@ -226,7 +246,24 @@ function renderCollections() {
     const reqsContainer = collDiv.querySelector(`#requests-list-${coll.id}`);
     
     if (coll.requests && coll.requests.length > 0) {
+      const folderContainers = new Map();
       coll.requests.forEach(req => {
+        let parentContainer = reqsContainer;
+        if (req.folderPath) {
+          let currentPath = '';
+          req.folderPath.split('/').forEach(folderName => {
+            currentPath = currentPath ? `${currentPath}/${folderName}` : folderName;
+            if (!folderContainers.has(currentPath)) {
+              const folder = document.createElement('div');
+              folder.className = 'coll-subfolder';
+              folder.style.cssText = 'margin-left: 12px; border-left: 1px solid var(--border-color); padding-left: 8px;';
+              folder.innerHTML = `<div style="padding: 5px 4px; color: var(--text-muted); font-size: 11px;"><i class="fa-solid fa-folder"></i> ${escapeHTML(folderName)}</div>`;
+              parentContainer.appendChild(folder);
+              folderContainers.set(currentPath, folder);
+            }
+            parentContainer = folderContainers.get(currentPath);
+          });
+        }
         const reqItem = document.createElement('div');
         reqItem.className = 'coll-req-item';
         reqItem.dataset.id = req.id;
@@ -261,7 +298,7 @@ function renderCollections() {
           }
         });
 
-        reqsContainer.appendChild(reqItem);
+        parentContainer.appendChild(reqItem);
       });
     } else {
       reqsContainer.innerHTML = `<div class="empty-state" style="padding: 10px; font-size: 11px;"><p>Folder empty</p></div>`;
@@ -554,11 +591,31 @@ async function startCollectionRun() {
   // Filter requests based on UI selection
   const checkedBoxes = document.querySelectorAll('.runner-req-checkbox:checked');
   const selectedReqIds = Array.from(checkedBoxes).map(cb => cb.value);
-  const requestsToRun = collection.requests.filter(req => selectedReqIds.includes(req.id));
+  const collectionVariables = Array.isArray(collection.variables)
+    ? collection.variables.reduce((values, variable) => {
+      if (variable.enabled !== false && variable.key) values[variable.key] = variable.value || '';
+      return values;
+    }, {})
+    : { ...(collection.variables || {}) };
+  const requestsToRun = collection.requests
+    .filter(req => selectedReqIds.includes(String(req.id)))
+    .map(req => ({ ...req, collectionId: collection.id, collectionVariables }));
   
   if (requestsToRun.length === 0) {
     alert('Please select at least one request to run from the list.');
     return;
+  }
+
+  for (const request of requestsToRun) {
+    if (request.auth && request.auth.type === 'oauth2') {
+      try {
+        const token = await acquireOAuthToken(request.auth, true);
+        request.auth = { ...request.auth, oauthAccessToken: token };
+      } catch (error) {
+        alert(`Could not prepare OAuth for "${request.name}": ${error.message}`);
+        return;
+      }
+    }
   }
 
   // Set up running states
@@ -618,13 +675,11 @@ async function startCollectionRun() {
 
   // Create absolute Proxy URL
   const proxyUrl = `${window.location.origin}/api/proxy`;
-  // Determine engine
-  // Use proxy mode for all external routes, or get it from active settings
-  const engine = 'proxy'; // Always use proxy in runner to secure CORS bypass on requests
+  const engine = document.getElementById('runner-engine').value;
 
   // Orchestrate execution based on mode
   if (mode === 'sequential') {
-    runSequential(requestsToRun, runGlobals, runEnv, proxyUrl, engine, delay, iterations, runnerData);
+    runSequential(requestsToRun, runGlobals, runEnv, proxyUrl, engine, envId, delay, iterations, runnerData);
   } else {
     runParallel(tasks, runGlobals, runEnv, proxyUrl, engine, threads);
   }
@@ -633,9 +688,10 @@ async function startCollectionRun() {
 /**
  * Sequential execution (1 worker) propagating variables and supporting postman.setNextRequest
  */
-async function runSequential(requestsToRun, globalsSnapshot, envSnapshot, proxyUrl, engine, delay, iterations, runnerData) {
+async function runSequential(requestsToRun, globalsSnapshot, envSnapshot, proxyUrl, engine, envId, delay, iterations, runnerData) {
   let activeGlobals = { ...globalsSnapshot };
   let activeEnv = { ...envSnapshot };
+  let activeCollectionVariables = { ...(requestsToRun[0].collectionVariables || {}) };
 
   const worker = new Worker('runner-worker.js');
   currentRun.workers.push(worker);
@@ -656,7 +712,7 @@ async function runSequential(requestsToRun, globalsSnapshot, envSnapshot, proxyU
 
       const req = requestsToRun[reqIdx];
       const task = {
-        request: req,
+        request: { ...req, collectionVariables: activeCollectionVariables },
         iteration: iter,
         iterationData: iterationData,
         index: reqIdx,
@@ -695,6 +751,7 @@ async function runSequential(requestsToRun, globalsSnapshot, envSnapshot, proxyU
         request: task.request,
         globals: activeGlobals,
         environment: taskEnv,
+        iterationData: task.iterationData || {},
         proxyUrl,
         engine
       });
@@ -707,10 +764,16 @@ async function runSequential(requestsToRun, globalsSnapshot, envSnapshot, proxyU
       // Propagate mutated variables sequentially
       activeGlobals = result.globals;
       activeEnv = result.environment;
+      activeCollectionVariables = result.collectionVariables || activeCollectionVariables;
+      const activeCollection = collections.find(item => String(item.id) === String(req.collectionId));
+      if (activeCollection) {
+        activeCollection.variables = activeCollectionVariables;
+        saveCollections();
+      }
 
       // Save run log
       logTaskResult(task, result);
-      updateActiveEnvironmentVariables(result.environment);
+      updateActiveEnvironmentVariables(result.environment, envId);
 
       // Apply delay
       if (delay > 0 && reqIdx < requestsToRun.length && !currentRun.stopRequested) {
@@ -795,9 +858,13 @@ async function runParallel(tasks, globalsSnapshot, envSnapshot, proxyUrl, engine
 
     worker.postMessage({
       action: 'run_request',
-      request: task.request,
+      request: {
+        ...task.request,
+        collectionVariables: task.request.collectionVariables || {}
+      },
       globals: globalsSnapshot, // in parallel, all get initial snapshot
       environment: taskEnv,
+      iterationData: task.iterationData || {},
       proxyUrl,
       engine
     });
@@ -992,8 +1059,8 @@ function finalizeRunnerRun() {
 /**
  * Update system variables snapshot in memory if mutated inside worker run
  */
-function updateActiveEnvironmentVariables(envSnapshot) {
-  if (activeEnvId === 'globals') {
+function updateActiveEnvironmentVariables(envSnapshot, envId = activeEnvId) {
+  if (envId === 'globals') {
     // Globals update
     Object.keys(envSnapshot).forEach(key => {
       globals[key] = envSnapshot[key];
@@ -1001,7 +1068,7 @@ function updateActiveEnvironmentVariables(envSnapshot) {
     saveGlobals();
   } else {
     // Selected Environment update
-    const activeEnv = environments.find(e => e.id === activeEnvId);
+    const activeEnv = environments.find(e => String(e.id) === String(envId));
     if (activeEnv && activeEnv.variables) {
       activeEnv.variables.forEach(v => {
         if (v.key in envSnapshot) {

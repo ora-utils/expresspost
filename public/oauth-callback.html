@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ExpressPost OAuth callback</title>
+</head>
+<body>
+  <p>Completing authorization…</p>
+  <script>
+    const params = Object.fromEntries(new URLSearchParams(location.search));
+    if (window.opener) {
+      window.opener.postMessage(
+        { type: 'expresspost-oauth-callback', params },
+        location.origin
+      );
+      window.close();
+    } else {
+      document.body.textContent = 'Authorization returned. You can close this window.';
+    }
+  </script>
+</body>
+</html>

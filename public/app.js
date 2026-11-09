@@ -12,6 +12,7 @@ let preRequestEditor = null;
 let testsEditor = null;
 let responseEditor = null;
 let devConsoleLogs = [];
+const activeRequestControllers = new Map();
 // Global Request Deletion Handler
 window.deleteRequestFromCollection = function(e, reqId, collId) {
   e.preventDefault();
@@ -29,6 +30,7 @@ window.deleteRequestFromCollection = function(e, reqId, collId) {
 
 // Initialize Page
 document.addEventListener('DOMContentLoaded', () => {
+  setupAppearanceControls();
   initAceEditors();
   initCollectionsAndRunner();
   loadTabs();
@@ -45,12 +47,73 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
+function setupAppearanceControls() {
+  const root = document.documentElement;
+  const modal = document.getElementById('appearance-modal');
+  const openButtons = [
+    document.getElementById('btn-open-appearance'),
+    document.getElementById('btn-open-appearance-runner')
+  ].filter(Boolean);
+  const themeSelect = document.getElementById('appearance-theme');
+  const accentInput = document.getElementById('appearance-accent');
+  const densitySelect = document.getElementById('appearance-density');
+  const defaultAccent = '#ff7954';
+
+  if (!modal || openButtons.length === 0 || !themeSelect || !accentInput || !densitySelect) {
+    throw new Error('Appearance controls are missing from the page.');
+  }
+
+  themeSelect.value = root.dataset.theme || 'dark';
+  accentInput.value = root.style.getPropertyValue('--primary').trim() || defaultAccent;
+  densitySelect.value = root.dataset.density || 'compact';
+
+  const savePreferences = () => {
+    root.dataset.theme = themeSelect.value;
+    root.style.setProperty('--primary', accentInput.value);
+    root.dataset.density = densitySelect.value;
+    const editorTheme = themeSelect.value === 'light' ? 'ace/theme/chrome' : 'ace/theme/tomorrow_night';
+    [bodyEditor, preRequestEditor, testsEditor, responseEditor]
+      .filter(Boolean)
+      .forEach(editor => editor.setTheme(editorTheme));
+    localStorage.setItem('expresspost_theme', themeSelect.value);
+    localStorage.setItem('expresspost_accent', accentInput.value);
+    localStorage.setItem('expresspost_density', densitySelect.value);
+  };
+  let lastOpenButton = null;
+  const closeModal = () => {
+    modal.classList.add('hidden');
+    if (lastOpenButton && lastOpenButton.isConnected) lastOpenButton.focus();
+  };
+
+  openButtons.forEach(button => {
+    button.addEventListener('click', () => {
+      lastOpenButton = button;
+      modal.classList.remove('hidden');
+      themeSelect.focus();
+    });
+  });
+  document.getElementById('btn-close-appearance').addEventListener('click', closeModal);
+  document.getElementById('btn-done-appearance').addEventListener('click', closeModal);
+  document.getElementById('btn-reset-accent').addEventListener('click', () => {
+    accentInput.value = defaultAccent;
+    savePreferences();
+  });
+  [themeSelect, densitySelect].forEach(control => control.addEventListener('change', savePreferences));
+  accentInput.addEventListener('input', savePreferences);
+  modal.addEventListener('click', event => {
+    if (event.target === modal) closeModal();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
+  });
+}
+
 /**
  * Initialize Ace Editors via CDN
  */
 function initAceEditors() {
   const aceOptions = {
-    theme: 'ace/theme/tomorrow_night',
+    theme: document.documentElement.dataset.theme === 'light' ? 'ace/theme/chrome' : 'ace/theme/tomorrow_night',
     showPrintMargin: false,
     fontSize: '13px',
     tabSize: 4,
@@ -120,8 +183,66 @@ function loadTabs() {
 }
 
 function saveTabsState() {
-  localStorage.setItem('workspace_tabs', JSON.stringify(tabs));
+  localStorage.setItem('workspace_tabs', JSON.stringify(stripOAuthSecrets(tabs)));
   localStorage.setItem('workspace_active_tab', activeTabId);
+}
+
+const OAUTH_SESSION_SECRET_FIELDS = [
+  'oauthClientSecret',
+  'oauthUsername',
+  'oauthPassword',
+  'oauthAccessToken',
+  'oauthRefreshToken',
+  'oauthExpiresAt'
+];
+
+function ensureOAuthSessionId(auth) {
+  if (!auth.oauthSessionId) {
+    auth.oauthSessionId = `oauth-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+  return auth.oauthSessionId;
+}
+
+function saveOAuthSecret(auth, field, value) {
+  const key = `expresspost:${ensureOAuthSessionId(auth)}:${field}`;
+  if (value) sessionStorage.setItem(key, String(value));
+  else sessionStorage.removeItem(key);
+}
+
+function readOAuthSecret(auth, field) {
+  if (!auth || !auth.oauthSessionId) return '';
+  return sessionStorage.getItem(`expresspost:${auth.oauthSessionId}:${field}`) || '';
+}
+
+function removeOAuthSecrets(auth) {
+  const cleanAuth = { ...(auth || {}) };
+  if (cleanAuth.type === 'oauth2') {
+    OAUTH_SESSION_SECRET_FIELDS.forEach(field => {
+      if (cleanAuth[field] !== undefined) {
+        saveOAuthSecret(cleanAuth, field, cleanAuth[field]);
+        delete cleanAuth[field];
+      }
+    });
+  }
+  return cleanAuth;
+}
+
+function moveOAuthSecretsToSession(auth) {
+  const cleanAuth = removeOAuthSecrets(auth);
+  OAUTH_SESSION_SECRET_FIELDS.forEach(field => { delete auth[field]; });
+  Object.assign(auth, cleanAuth);
+  return auth;
+}
+
+function hydrateOAuthAuth(auth) {
+  const hydrated = { ...(auth || {}) };
+  if (hydrated.type === 'oauth2') {
+    ensureOAuthSessionId(hydrated);
+    OAUTH_SESSION_SECRET_FIELDS.forEach(field => {
+      hydrated[field] = readOAuthSecret(hydrated, field) || hydrated[field] || '';
+    });
+  }
+  return hydrated;
 }
 
 function createNewTab(initialData = null) {
@@ -136,15 +257,29 @@ function createNewTab(initialData = null) {
     bodyType: 'none',
     bodyRawType: 'application/json',
     body: '',
-    formData: [{ key: '', value: '', type: 'text', fileData: null, fileName: '', enabled: true }],
+    formdata: [{ key: '', value: '', type: 'text', fileData: null, fileName: '', enabled: true }],
     urlencoded: [{ key: '', value: '', enabled: true }],
     preRequestScript: '',
     testsScript: '',
+    savedCollectionId: null,
+    savedRequestId: null,
+    description: '',
     response: null,
     testResults: null
   };
 
   const newTabObj = initialData ? { ...defaultTab, ...initialData, id } : defaultTab;
+  newTabObj.name = newTabObj.name || 'New Request';
+  newTabObj.method = newTabObj.method || 'GET';
+  newTabObj.url = newTabObj.url || '';
+  newTabObj.headers = Array.isArray(newTabObj.headers) ? newTabObj.headers : defaultTab.headers;
+  newTabObj.auth = { ...defaultTab.auth, ...(newTabObj.auth || {}) };
+  newTabObj.formdata = initialData
+    ? (initialData.formdata || initialData.formData || defaultTab.formdata)
+    : defaultTab.formdata;
+  newTabObj.urlencoded = initialData && initialData.urlencoded
+    ? initialData.urlencoded
+    : defaultTab.urlencoded;
   
   // Strip duplicate template empty rows from initial headers
   if (newTabObj.headers.length === 0) {
@@ -178,6 +313,7 @@ function renderTabsUI() {
     tabBtn.innerHTML = `
       <span class="${methodClass}">${tab.method}</span>
       <span class="tab-name">${escapeHTML(tab.name)}</span>
+      ${activeRequestControllers.has(tab.id) ? '<i class="fa-solid fa-spinner fa-spin" aria-label="Request running"></i>' : ''}
       <span class="close-tab-btn" data-id="${tab.id}">&times;</span>
     `;
     
@@ -198,6 +334,9 @@ function closeTab(id) {
   const tabIdx = tabs.findIndex(t => t.id === id);
   if (tabIdx === -1) return;
 
+  const activeController = activeRequestControllers.get(id);
+  if (activeController) activeController.abort();
+  activeRequestControllers.delete(id);
   tabs.splice(tabIdx, 1);
   
   if (tabs.length === 0) {
@@ -217,6 +356,20 @@ function getActiveTab() {
   return tabs.find(t => t.id === activeTabId);
 }
 
+function updateSendButtonState(tabId) {
+  const sendBtn = document.getElementById('btn-send-request');
+  if (!sendBtn) return;
+  if (activeRequestControllers.has(tabId)) {
+    sendBtn.innerHTML = '<span>Cancel</span> <i class="fa-solid fa-stop"></i>';
+    sendBtn.title = 'Cancel the in-flight request';
+    sendBtn.disabled = false;
+  } else {
+    sendBtn.innerHTML = '<span>Send</span> <i class="fa-solid fa-paper-plane"></i>';
+    sendBtn.title = '';
+    sendBtn.disabled = false;
+  }
+}
+
 function switchActiveTab(id) {
   activeTabId = id;
   saveTabsState();
@@ -228,6 +381,7 @@ function switchActiveTab(id) {
 
   const tab = getActiveTab();
   if (!tab) return;
+  updateSendButtonState(id);
 
   // Address Bar inputs
   document.getElementById('request-method').value = tab.method;
@@ -249,6 +403,20 @@ function switchActiveTab(id) {
   document.getElementById('auth-apikey-key').value = tab.auth.key || '';
   document.getElementById('auth-apikey-value').value = tab.auth.value || '';
   document.getElementById('auth-apikey-in').value = tab.auth.in || 'header';
+  if (tab.auth.type === 'oauth2') moveOAuthSecretsToSession(tab.auth);
+  const oauthAuth = hydrateOAuthAuth(tab.auth);
+  document.getElementById('oauth-grant-type').value = tab.auth.oauthGrantType || 'client_credentials';
+  document.getElementById('oauth-client-id').value = tab.auth.oauthClientId || '';
+  document.getElementById('oauth-client-secret').value = oauthAuth.oauthClientSecret || '';
+  document.getElementById('oauth-token-url').value = tab.auth.oauthTokenUrl || '';
+  document.getElementById('oauth-authorization-url').value = tab.auth.oauthAuthorizationUrl || '';
+  document.getElementById('oauth-redirect-url').value = tab.auth.oauthRedirectUrl || `${window.location.origin}/oauth/callback`;
+  document.getElementById('oauth-scope').value = tab.auth.oauthScope || '';
+  document.getElementById('oauth-client-auth').value = tab.auth.oauthClientAuth || 'body';
+  document.getElementById('oauth-username').value = oauthAuth.oauthUsername || '';
+  document.getElementById('oauth-password').value = oauthAuth.oauthPassword || '';
+  updateOAuthGrantFields(tab.auth.oauthGrantType || 'client_credentials');
+  document.getElementById('oauth-token-status').textContent = oauthAuth.oauthAccessToken ? 'Token available for this session' : 'No token';
 
   // Body UI
   const bodyRadios = document.getElementsByName('body-type');
@@ -585,6 +753,11 @@ function setupAppEventListeners() {
     const activeTab = getActiveTab();
     if (activeTab) {
       activeTab.auth.type = e.target.value;
+      if (e.target.value === 'oauth2') {
+        ensureOAuthSessionId(activeTab.auth);
+        activeTab.auth.oauthGrantType = activeTab.auth.oauthGrantType || 'client_credentials';
+        activeTab.auth.oauthClientAuth = activeTab.auth.oauthClientAuth || 'body';
+      }
       saveTabsState();
       toggleAuthPaneFields(e.target.value);
     }
@@ -603,6 +776,63 @@ function setupAppEventListeners() {
         activeTab.auth.value = document.getElementById('auth-apikey-value').value;
         activeTab.auth.in = document.getElementById('auth-apikey-in').value;
         saveTabsState();
+      }
+    });
+
+    const oauthConfigFields = {
+      'oauth-grant-type': 'oauthGrantType',
+      'oauth-client-id': 'oauthClientId',
+      'oauth-token-url': 'oauthTokenUrl',
+      'oauth-authorization-url': 'oauthAuthorizationUrl',
+      'oauth-redirect-url': 'oauthRedirectUrl',
+      'oauth-scope': 'oauthScope',
+      'oauth-client-auth': 'oauthClientAuth'
+    };
+    Object.entries(oauthConfigFields).forEach(([elementId, authKey]) => {
+      document.getElementById(elementId).addEventListener('input', event => {
+        const activeTab = getActiveTab();
+        if (!activeTab) return;
+        activeTab.auth[authKey] = event.target.value;
+        ensureOAuthSessionId(activeTab.auth);
+        if (authKey === 'oauthGrantType') updateOAuthGrantFields(event.target.value);
+        saveTabsState();
+      });
+      document.getElementById(elementId).addEventListener('change', event => {
+        const activeTab = getActiveTab();
+        if (!activeTab) return;
+        activeTab.auth[authKey] = event.target.value;
+        ensureOAuthSessionId(activeTab.auth);
+        if (authKey === 'oauthGrantType') updateOAuthGrantFields(event.target.value);
+        saveTabsState();
+      });
+    });
+    [
+      ['oauth-client-secret', 'oauthClientSecret'],
+      ['oauth-username', 'oauthUsername'],
+      ['oauth-password', 'oauthPassword']
+    ].forEach(([elementId, secretKey]) => {
+      document.getElementById(elementId).addEventListener('input', event => {
+        const activeTab = getActiveTab();
+        if (!activeTab) return;
+        ensureOAuthSessionId(activeTab.auth);
+        saveOAuthSecret(activeTab.auth, secretKey, event.target.value);
+        saveTabsState();
+      });
+    });
+    document.getElementById('btn-oauth-get-token').addEventListener('click', async event => {
+      const activeTab = getActiveTab();
+      if (!activeTab) return;
+      const button = event.currentTarget;
+      button.disabled = true;
+      document.getElementById('oauth-token-status').textContent = 'Requesting token...';
+      try {
+        await acquireOAuthToken(activeTab.auth, true, true);
+        document.getElementById('oauth-token-status').textContent = 'Token acquired for this session';
+        saveTabsState();
+      } catch (error) {
+        document.getElementById('oauth-token-status').textContent = error.message;
+      } finally {
+        button.disabled = false;
       }
     });
   });
@@ -711,9 +941,27 @@ function setupAppEventListeners() {
   document.querySelectorAll('.snippet-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const snipType = btn.dataset.snippet;
+      const target = btn.dataset.snippetTarget === 'pre-request' ? preRequestEditor : testsEditor;
       let codeToInject = '';
       
       switch(snipType) {
+        case 'set-env':
+          codeToInject = btn.dataset.snippetTarget === 'pre-request'
+            ? `pm.environment.set("access_token", "replace-with-token");\n`
+            : `pm.environment.set("jwt_token", pm.response.json().token);\n`;
+          break;
+        case 'set-global':
+          codeToInject = `pm.globals.set("run_id", Date.now());\n`;
+          break;
+        case 'timestamp':
+          codeToInject = `pm.variables.set("timestamp", new Date().toISOString());\n`;
+          break;
+        case 'random-id':
+          codeToInject = `pm.variables.set("requestId", Math.random().toString(36).slice(2));\n`;
+          break;
+        case 'add-header':
+          codeToInject = `pm.request.headers.add({ key: "X-Request-Id", value: pm.variables.get("requestId") || "example-id" });\n`;
+          break;
         case 'status-200':
           codeToInject = `pm.test("Status code is 200", function () {\n    pm.response.to.have.status(200);\n});\n`;
           break;
@@ -723,17 +971,17 @@ function setupAppEventListeners() {
         case 'contains-string':
           codeToInject = `pm.test("Body matches string check", function () {\n    pm.expect(pm.response.text()).to.include("success_token");\n});\n`;
           break;
-        case 'set-env':
-          codeToInject = `pm.environment.set("jwt_token", pm.response.json().token);\n`;
-          break;
         case 'response-time':
           codeToInject = `pm.test("Response latency is less than 200ms", function () {\n    pm.expect(pm.response.responseTime).to.be.below(200);\n});\n`;
           break;
+        case 'content-type':
+          codeToInject = `pm.test("Response is JSON", function () {\n    pm.expect(pm.response.headers.get("content-type")).to.include("application/json");\n});\n`;
+          break;
       }
       
-      const session = testsEditor.getSession();
+      const session = target.getSession();
       session.insert({ row: session.getLength(), column: 0 }, codeToInject);
-      testsEditor.focus();
+      target.focus();
     });
   });
 
@@ -818,6 +1066,16 @@ function toggleAuthPaneFields(authType) {
   } else {
     document.getElementById(`auth-${authType}-fields`).classList.remove('hidden');
   }
+}
+
+function updateOAuthGrantFields(grantType) {
+  const authorizationCode = grantType === 'authorization_code' || grantType === 'authorization_code_pkce';
+  const needsPassword = grantType === 'password';
+  document.getElementById('oauth-authorization-url-group').classList.toggle('hidden', !authorizationCode);
+  document.getElementById('oauth-redirect-url-group').classList.toggle('hidden', !authorizationCode);
+  document.getElementById('oauth-password-group').classList.toggle('hidden', !needsPassword);
+  document.getElementById('oauth-client-secret-group').classList.toggle('hidden', grantType === 'authorization_code_pkce');
+  document.getElementById('oauth-client-auth-group').classList.toggle('hidden', grantType === 'authorization_code_pkce');
 }
 
 function toggleBodyPane(bodyType) {
@@ -905,11 +1163,11 @@ function getActiveEnvironmentSnapshot() {
   return snapshot;
 }
 
-function resolveTextVariables(text, envSnapshot) {
+function resolveTextVariables(text, envSnapshot, localVariables = {}) {
   if (typeof text !== 'string') return text;
   
   // Combines environment snapshot + globals snapshot for matching
-  const allVars = { ...globals, ...envSnapshot };
+  const allVars = { ...globals, ...envSnapshot, ...localVariables };
 
   return text.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
     const trimmedKey = key.trim();
@@ -918,25 +1176,49 @@ function resolveTextVariables(text, envSnapshot) {
   });
 }
 
+function getSavedCollectionVariables(tab) {
+  const collection = tab && tab.savedCollectionId
+    ? collections.find(item => String(item.id) === String(tab.savedCollectionId))
+    : null;
+  const stored = collection && collection.variables;
+  if (Array.isArray(stored)) {
+    return stored.reduce((values, variable) => {
+      if (variable.enabled !== false && variable.key) values[variable.key] = variable.value || '';
+      return values;
+    }, {});
+  }
+  return stored && typeof stored === 'object' ? { ...stored } : {};
+}
+
 /**
  * API Requests Dispatch Engine
  */
 async function sendActiveRequest() {
   const tab = getActiveTab();
   if (!tab) return;
+  const existingController = activeRequestControllers.get(tab.id);
+  if (existingController) {
+    existingController.abort();
+    return;
+  }
 
   const urlInput = document.getElementById('request-url').value.trim();
   if (!urlInput) {
     alert('Please enter a target URL.');
     return;
   }
+  const engine = document.getElementById('request-engine').value;
+  const controller = new AbortController();
+  const start = Date.now();
+  let responseData = null;
+  activeRequestControllers.set(tab.id, controller);
+  tab.response = null;
+  tab.testResults = null;
 
-  // Update button UI loading state
-  const sendBtn = document.getElementById('btn-send-request');
-  const originalHtml = sendBtn.innerHTML;
-  sendBtn.innerHTML = `<span>Sending...</span> <i class="fa-solid fa-spinner fa-spin"></i>`;
-  sendBtn.disabled = true;
+  updateSendButtonState(tab.id);
+  renderTabsUI();
 
+  try {
   // Clear previous response panels
   document.getElementById('response-empty-state').classList.add('hidden');
   document.getElementById('response-content-area').classList.add('hidden');
@@ -946,65 +1228,95 @@ async function sendActiveRequest() {
   const envSnapshot = getActiveEnvironmentSnapshot();
   let requestGlobals = { ...globals };
   let requestEnv = { ...envSnapshot };
+  let requestCollectionVariables = getSavedCollectionVariables(tab);
+  let requestLocalVariables = {};
+  let preScriptResults = [];
+  let requestUrl = urlInput;
+  let requestMethod = tab.method;
+  let requestBodyType = tab.bodyType;
+  let requestHeaders = getFlatHeadersObject(getRowsDataFromTable('headers'));
+  let requestBody = requestBodyType === 'raw'
+    ? bodyEditor.getValue()
+    : requestBodyType === 'form-data'
+      ? getRowsDataFromTable('formdata')
+      : requestBodyType === 'urlencoded'
+        ? getRowsDataFromTable('urlencoded')
+        : '';
 
   // 1. Evaluate Pre-request scripts
   if (tab.preRequestScript && tab.preRequestScript.trim() !== '') {
     appendConsoleLogs([{ type: 'info', message: `=== Pre-request Script execution: "${tab.name}" ===`, time: new Date().toLocaleTimeString() }]);
     
-    const preSandboxResult = runScriptSandbox(tab.preRequestScript, {
+    const preSandboxResult = await runScriptSandbox(tab.preRequestScript, {
       globals: requestGlobals,
       environment: requestEnv,
+      collectionVariables: requestCollectionVariables,
+      localVariables: requestLocalVariables,
+      sendRequest: options => executeScriptRequest(options, engine, controller.signal),
       request: {
-        url: urlInput,
-        method: tab.method,
-        headers: getFlatHeadersObject(tab.headers),
-        body: tab.body
+        url: requestUrl,
+        method: requestMethod,
+        headers: requestHeaders,
+        body: requestBody,
+        bodyType: requestBodyType
       }
     });
 
     // Capture outputs
     requestGlobals = preSandboxResult.globals;
     requestEnv = preSandboxResult.environment;
+    requestCollectionVariables = preSandboxResult.collectionVariables;
+    requestLocalVariables = preSandboxResult.localVariables;
+    preScriptResults = preSandboxResult.testResults;
+    requestUrl = preSandboxResult.request.url || requestUrl;
+    requestMethod = preSandboxResult.request.method || requestMethod;
+    requestHeaders = preSandboxResult.request.headers || requestHeaders;
+    requestBody = preSandboxResult.request.body;
+    requestBodyType = preSandboxResult.request.bodyType || requestBodyType;
     appendConsoleLogs(preSandboxResult.logs);
   }
 
   // Resolve double curly braces
-  const resolvedUrl = resolveTextVariables(urlInput, requestEnv);
-  const resolvedHeaders = resolveHeadersObject(tab.headers, requestEnv);
+  const variableSnapshot = {
+    ...requestCollectionVariables,
+    ...requestEnv,
+    ...requestLocalVariables
+  };
+  let resolvedUrl = resolveTextVariables(requestUrl, requestEnv, variableSnapshot);
+  const resolvedHeaders = resolveHeadersObject(requestHeaders, requestEnv, variableSnapshot);
   
   // Format body parameters
   let resolvedBody = null;
-  if (tab.bodyType === 'raw') {
-    resolvedBody = resolveTextVariables(tab.body, requestEnv);
-  } else if (tab.bodyType === 'urlencoded') {
-    // Form data row resolution
-    resolvedBody = getFlatBodyParams(getRowsDataFromTable('urlencoded'), requestEnv);
-  } else if (tab.bodyType === 'form-data') {
-    resolvedBody = getFlatBodyParams(getRowsDataFromTable('formdata'), requestEnv);
+  if (requestBodyType === 'raw') {
+    resolvedBody = resolveTextVariables(requestBody, requestEnv, variableSnapshot);
+  } else if (requestBodyType === 'urlencoded') {
+    resolvedBody = getFlatBodyParams(Array.isArray(requestBody) ? requestBody : getRowsDataFromTable('urlencoded'), { ...requestEnv, ...variableSnapshot });
+  } else if (requestBodyType === 'form-data') {
+    resolvedBody = getFlatBodyParams(Array.isArray(requestBody) ? requestBody : getRowsDataFromTable('formdata'), { ...requestEnv, ...variableSnapshot });
   }
 
-  // Inject Authorization
-  injectAuthorizationToRequest(tab.auth, resolvedHeaders, resolvedUrl, requestEnv);
-
-  const engine = document.getElementById('request-engine').value;
-  const start = Date.now();
-  let responseData = null;
-
   try {
+    if (tab.auth.type === 'oauth2') {
+      const token = await acquireOAuthToken(tab.auth, false, false, controller.signal);
+      resolvedHeaders.Authorization = `Bearer ${token}`;
+    } else {
+      resolvedUrl = injectAuthorizationToRequest(tab.auth, resolvedHeaders, resolvedUrl, { ...requestEnv, ...variableSnapshot });
+    }
+
     if (engine === 'proxy') {
       const proxyPostUrl = `${window.location.origin}/api/proxy`;
       
       // Form fields format sync if sending form-data through proxy
       let finalProxyBody = resolvedBody;
       const hasContentType = Object.keys(resolvedHeaders).some(k => k.toLowerCase() === 'content-type');
-      if (tab.bodyType === 'urlencoded' && Array.isArray(resolvedBody)) {
+      if (requestBodyType === 'urlencoded' && Array.isArray(resolvedBody)) {
         const params = new URLSearchParams();
         resolvedBody.forEach(item => params.append(item.key, item.value));
         finalProxyBody = params.toString();
         resolvedHeaders['content-type'] = 'application/x-www-form-urlencoded';
-      } else if (tab.bodyType === 'raw' && resolvedBody && !hasContentType) {
+      } else if (requestBodyType === 'raw' && resolvedBody && !hasContentType) {
         resolvedHeaders['content-type'] = tab.bodyRawType || 'application/json';
-      } else if (tab.bodyType === 'form-data' && !hasContentType) {
+      } else if (requestBodyType === 'form-data' && !hasContentType) {
         // Must explicitly set to trigger multipart handler in proxy
         resolvedHeaders['content-type'] = 'multipart/form-data';
       }
@@ -1012,9 +1324,10 @@ async function sendActiveRequest() {
       const response = await fetch(proxyPostUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           url: resolvedUrl,
-          method: tab.method,
+          method: requestMethod,
           headers: resolvedHeaders,
           body: finalProxyBody
         })
@@ -1027,32 +1340,49 @@ async function sendActiveRequest() {
       responseData = await response.json();
     } else {
       // Direct browser connection fetch
-      responseData = await executeDirectBrowserRequest(tab.method, resolvedUrl, resolvedHeaders, resolvedBody, tab.bodyType);
+      responseData = await executeDirectBrowserRequest(requestMethod, resolvedUrl, resolvedHeaders, resolvedBody, requestBodyType, controller.signal);
     }
   } catch (error) {
-    responseData = {
-      status: 0,
-      statusText: 'Connection Error',
-      headers: {},
-      body: `Error: ${error.message}\nThis request could not be completed. If testing external APIs, please ensure you are in "Proxy Mode" to bypass CORS browser blocks.`,
-      time: Date.now() - start,
-      size: 0
-    };
+    if (controller.signal.aborted || error.name === 'AbortError') {
+      responseData = {
+        status: 0,
+        statusText: 'Request Cancelled',
+        headers: {},
+        body: 'Request cancelled.',
+        time: Date.now() - start,
+        size: 0
+      };
+    } else {
+      const directModeHelp = engine === 'direct'
+        ? 'Direct Mode uses the browser and cannot bypass the target server’s CORS policy. Oracle Fusion may need to allow this app origin and the request headers/method in its CORS configuration. If you cannot change that configuration, switch to Proxy Mode.'
+        : 'Check the target URL and local proxy/server availability.';
+      responseData = {
+        status: 0,
+        statusText: 'Connection Error',
+        headers: {},
+        body: `Error: ${error.message}\n${directModeHelp}`,
+        time: Date.now() - start,
+        size: 0
+      };
+    }
   }
 
   // 2. Evaluate Test Assertion Script
-  let testResults = [];
-  if (tab.testsScript && tab.testsScript.trim() !== '') {
+  let testResults = preScriptResults.slice();
+  if (!controller.signal.aborted && tab.testsScript && tab.testsScript.trim() !== '') {
     appendConsoleLogs([{ type: 'info', message: `=== Test Assertions execution: "${tab.name}" ===`, time: new Date().toLocaleTimeString() }]);
 
-    const testSandboxResult = runScriptSandbox(tab.testsScript, {
+    const testSandboxResult = await runScriptSandbox(tab.testsScript, {
       globals: requestGlobals,
       environment: requestEnv,
+      collectionVariables: requestCollectionVariables,
+      localVariables: requestLocalVariables,
+      sendRequest: options => executeScriptRequest(options, engine, controller.signal),
       request: {
         url: resolvedUrl,
-        method: tab.method,
+        method: requestMethod,
         headers: resolvedHeaders,
-        body: tab.body
+        body: resolvedBody
       },
       response: responseData
     });
@@ -1060,14 +1390,24 @@ async function sendActiveRequest() {
     // Capture mutations
     requestGlobals = testSandboxResult.globals;
     requestEnv = testSandboxResult.environment;
-    testResults = testSandboxResult.testResults;
+    requestCollectionVariables = testSandboxResult.collectionVariables;
+    requestLocalVariables = testSandboxResult.localVariables;
+    testResults.push(...testSandboxResult.testResults);
     appendConsoleLogs(testSandboxResult.logs);
   }
 
-  // Update variables in main memory
-  globals = requestGlobals;
-  saveGlobals();
-  updateEnvironmentVariablesMemory(requestEnv);
+  if (!controller.signal.aborted) {
+    globals = requestGlobals;
+    saveGlobals();
+    updateEnvironmentVariablesMemory(requestEnv);
+    const savedCollection = tab.savedCollectionId
+      ? collections.find(item => String(item.id) === String(tab.savedCollectionId))
+      : null;
+    if (savedCollection) {
+      savedCollection.variables = requestCollectionVariables;
+      saveCollections();
+    }
+  }
 
   // Cache response object to tab history
   tab.response = responseData;
@@ -1075,29 +1415,48 @@ async function sendActiveRequest() {
   saveTabsState();
 
   // Save successful trigger to History Panel
-  logRequestToHistory(tab.method, urlInput, responseData.status, responseData.time);
+  if (!controller.signal.aborted) {
+    logRequestToHistory(requestMethod, resolvedUrl, responseData.status, responseData.time);
+  }
 
   // Render response panels
-  renderResponseUI(responseData, testResults);
-
-  // Reset button UI
-  sendBtn.innerHTML = originalHtml;
-  sendBtn.disabled = false;
+  if (activeTabId === tab.id) renderResponseUI(responseData, testResults);
+  } catch (error) {
+    responseData = {
+      status: 0,
+      statusText: controller.signal.aborted ? 'Request Cancelled' : 'Request Error',
+      headers: {},
+      body: controller.signal.aborted ? 'Request cancelled.' : `Error: ${error.message}`,
+      time: Date.now() - start,
+      size: 0
+    };
+    tab.response = responseData;
+    tab.testResults = [];
+    saveTabsState();
+    if (activeTabId === tab.id) renderResponseUI(responseData, []);
+  } finally {
+    if (activeRequestControllers.get(tab.id) === controller) {
+      activeRequestControllers.delete(tab.id);
+    }
+    renderTabsUI();
+    if (activeTabId === tab.id) updateSendButtonState(tab.id);
+  }
 }
 
 /**
  * Handle direct fetch dispatch from app.js main thread context
  */
-async function executeDirectBrowserRequest(method, url, headers, body, bodyType) {
+async function executeDirectBrowserRequest(method, url, headers, body, bodyType, signal) {
   const fetchOptions = {
     method: method,
     headers: new Headers(headers),
-    mode: 'cors'
+    mode: 'cors',
+    signal
   };
 
   if (bodyType === 'raw' && body) {
     fetchOptions.body = body;
-    if (!headers['content-type']) {
+    if (!Object.keys(headers).some(key => key.toLowerCase() === 'content-type')) {
       fetchOptions.headers.set('Content-Type', 'application/json');
     }
   } else if (bodyType === 'urlencoded' && Array.isArray(body)) {
@@ -1151,6 +1510,202 @@ async function executeDirectBrowserRequest(method, url, headers, body, bodyType)
   };
 }
 
+async function executeScriptRequest(options, engine, signal) {
+  const request = typeof options === 'string' ? { url: options } : options;
+  const url = typeof request.url === 'string' ? request.url : request.url && request.url.raw;
+  const method = String(request.method || 'GET').toUpperCase();
+  const headers = Array.isArray(request.header)
+    ? request.header.reduce((result, header) => {
+      if (header.key && header.disabled !== true) result[header.key] = header.value || '';
+      return result;
+    }, {})
+    : { ...(request.headers || request.header || {}) };
+  let body = request.body;
+  let bodyType = body == null ? 'none' : 'raw';
+  if (body && typeof body === 'object') {
+    if (body.mode === 'urlencoded') {
+      body = body.urlencoded || [];
+      bodyType = 'urlencoded';
+      if (!Object.keys(headers).some(key => key.toLowerCase() === 'content-type')) {
+        headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      }
+    } else if (body.mode === 'formdata') {
+      body = body.formdata || [];
+      bodyType = 'form-data';
+      if (!Object.keys(headers).some(key => key.toLowerCase() === 'content-type')) {
+        headers['Content-Type'] = 'multipart/form-data';
+      }
+    } else {
+      body = body.raw;
+      bodyType = body == null ? 'none' : 'raw';
+    }
+  }
+
+  if (!url) throw new Error('pm.sendRequest requires a URL.');
+  if (engine !== 'proxy') {
+    return executeDirectBrowserRequest(method, url, headers, body, bodyType, signal);
+  }
+
+  if (bodyType === 'urlencoded' && Array.isArray(body)) {
+    const params = new URLSearchParams();
+    body.forEach(item => params.append(item.key, item.value || ''));
+    body = params.toString();
+  }
+  const response = await fetch(`${window.location.origin}/api/proxy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({ url, method, headers, body })
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.message || `Proxy error: ${response.statusText}`);
+  return result;
+}
+
+function oauthBase64Url(bytes) {
+  let binary = '';
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function requestOAuthAuthorizationCode(auth) {
+  if (!auth.oauthAuthorizationUrl) throw new Error('Enter an Authorization URL first.');
+  const popup = window.open('about:blank', 'expresspost-oauth', 'width=700,height=800');
+  if (!popup) throw new Error('The authorization popup was blocked. Allow popups and try again.');
+
+  const state = oauthBase64Url(crypto.getRandomValues(new Uint8Array(24)));
+  const pkce = auth.oauthGrantType === 'authorization_code_pkce';
+  const verifier = pkce ? oauthBase64Url(crypto.getRandomValues(new Uint8Array(32))) : '';
+  const redirectUri = auth.oauthRedirectUrl || `${window.location.origin}/oauth/callback`;
+  const callbackUrl = new URL(redirectUri);
+  if (callbackUrl.origin !== window.location.origin || callbackUrl.pathname !== '/oauth/callback') {
+    throw new Error('Redirect URI must use this app’s /oauth/callback route.');
+  }
+  const authorizationUrl = new URL(auth.oauthAuthorizationUrl);
+  authorizationUrl.searchParams.set('response_type', 'code');
+  authorizationUrl.searchParams.set('client_id', auth.oauthClientId || '');
+  authorizationUrl.searchParams.set('redirect_uri', redirectUri);
+  authorizationUrl.searchParams.set('state', state);
+  if (auth.oauthScope) authorizationUrl.searchParams.set('scope', auth.oauthScope);
+  if (pkce) {
+    const challenge = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+    authorizationUrl.searchParams.set('code_challenge', oauthBase64Url(new Uint8Array(challenge)));
+    authorizationUrl.searchParams.set('code_challenge_method', 'S256');
+  }
+
+  return new Promise((resolve, reject) => {
+    let finished = false;
+    const finish = (error, code) => {
+      if (finished) return;
+      finished = true;
+      window.removeEventListener('message', onMessage);
+      clearInterval(closeCheck);
+      clearTimeout(timeout);
+      if (!popup.closed) popup.close();
+      if (error) reject(error);
+      else resolve({ code, verifier, redirectUri });
+    };
+    const onMessage = event => {
+      if (event.origin !== window.location.origin || event.source !== popup ||
+          !event.data || event.data.type !== 'expresspost-oauth-callback') return;
+      const params = event.data.params || {};
+      if (params.state !== state) return finish(new Error('OAuth state validation failed.'));
+      if (params.error) return finish(new Error(`Authorization failed: ${params.error_description || params.error}`));
+      if (!params.code) return finish(new Error('The identity provider did not return an authorization code.'));
+      finish(null, params.code);
+    };
+    const closeCheck = setInterval(() => {
+      if (popup.closed) finish(new Error('Authorization window was closed before a code was received.'));
+    }, 500);
+    const timeout = setTimeout(() => finish(new Error('OAuth authorization timed out.')), 5 * 60 * 1000);
+    window.addEventListener('message', onMessage);
+    popup.location.href = authorizationUrl.toString();
+  });
+}
+
+async function requestOAuthToken(auth, parameters, signal) {
+  if (!auth.oauthTokenUrl) throw new Error('Enter a Token URL first.');
+  const tokenParameters = new URLSearchParams(parameters);
+  const headers = { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' };
+  if (auth.oauthGrantType !== 'authorization_code_pkce' && auth.oauthClientAuth === 'basic') {
+    if (!auth.oauthClientId || !auth.oauthClientSecret) throw new Error('Enter the OAuth client ID and secret.');
+    headers.Authorization = `Basic ${btoa(`${auth.oauthClientId}:${auth.oauthClientSecret}`)}`;
+    tokenParameters.delete('client_id');
+    tokenParameters.delete('client_secret');
+  } else if (auth.oauthClientId) {
+    tokenParameters.set('client_id', auth.oauthClientId);
+    if (auth.oauthGrantType !== 'authorization_code_pkce' && auth.oauthClientSecret) {
+      tokenParameters.set('client_secret', auth.oauthClientSecret);
+    }
+  }
+
+  const response = await executeScriptRequest({
+    url: auth.oauthTokenUrl,
+    method: 'POST',
+    headers,
+    body: tokenParameters.toString()
+  }, 'proxy', signal);
+  let tokenData;
+  try {
+    tokenData = typeof response.body === 'string' ? JSON.parse(response.body) : response.body;
+  } catch (error) {
+    throw new Error(`OAuth token endpoint returned invalid JSON (HTTP ${response.status}).`);
+  }
+  if (!tokenData || typeof tokenData !== 'object') {
+    throw new Error(`OAuth token endpoint returned an invalid response (HTTP ${response.status}).`);
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`OAuth token request failed (${response.status}): ${tokenData.error_description || tokenData.error || response.statusText}`);
+  }
+  if (!tokenData.access_token) throw new Error('OAuth token response did not contain access_token.');
+  return tokenData;
+}
+
+async function acquireOAuthToken(auth, allowInteractive = false, force = false, signal) {
+  if (!auth || auth.type !== 'oauth2') throw new Error('Select OAuth 2.0 authorization first.');
+  moveOAuthSecretsToSession(auth);
+  ensureOAuthSessionId(auth);
+  const hydrated = hydrateOAuthAuth(auth);
+  const expiresAt = Number(hydrated.oauthExpiresAt || 0);
+  if (!force && hydrated.oauthAccessToken && (!expiresAt || expiresAt > Date.now() + 60000)) {
+    return hydrated.oauthAccessToken;
+  }
+
+  let parameters;
+  if (!force && hydrated.oauthRefreshToken) {
+    parameters = { grant_type: 'refresh_token', refresh_token: hydrated.oauthRefreshToken };
+  } else if (hydrated.oauthGrantType === 'client_credentials') {
+    parameters = { grant_type: 'client_credentials' };
+    if (hydrated.oauthScope) parameters.scope = hydrated.oauthScope;
+  } else if (hydrated.oauthGrantType === 'password') {
+    if (!hydrated.oauthUsername || !hydrated.oauthPassword) throw new Error('Enter the OAuth username and password.');
+    parameters = {
+      grant_type: 'password',
+      username: hydrated.oauthUsername,
+      password: hydrated.oauthPassword
+    };
+    if (hydrated.oauthScope) parameters.scope = hydrated.oauthScope;
+  } else if (hydrated.oauthGrantType === 'authorization_code' || hydrated.oauthGrantType === 'authorization_code_pkce') {
+    if (!allowInteractive) throw new Error('Click "Get New Access Token" to complete OAuth authorization.');
+    const authorization = await requestOAuthAuthorizationCode(hydrated);
+    parameters = {
+      grant_type: 'authorization_code',
+      code: authorization.code,
+      redirect_uri: authorization.redirectUri
+    };
+    if (authorization.verifier) parameters.code_verifier = authorization.verifier;
+  } else {
+    throw new Error(`Unsupported OAuth grant type: ${hydrated.oauthGrantType}`);
+  }
+
+  const tokenData = await requestOAuthToken(hydrated, parameters, signal);
+  saveOAuthSecret(auth, 'oauthAccessToken', tokenData.access_token);
+  if (tokenData.refresh_token) saveOAuthSecret(auth, 'oauthRefreshToken', tokenData.refresh_token);
+  const expiresIn = Number(tokenData.expires_in || 0);
+  saveOAuthSecret(auth, 'oauthExpiresAt', expiresIn ? String(Date.now() + expiresIn * 1000) : '');
+  return tokenData.access_token;
+}
+
 /**
  * Sync variables mutation states back to environments variables
  */
@@ -1181,12 +1736,15 @@ function getFlatHeadersObject(headersArray) {
   return headers;
 }
 
-function resolveHeadersObject(headersArray, envSnapshot) {
+function resolveHeadersObject(headersArray, envSnapshot, localVariables = {}) {
   const headers = {};
-  headersArray.forEach(h => {
-    if (h.enabled && h.key) {
-      const resolvedKey = resolveTextVariables(h.key, envSnapshot);
-      const resolvedVal = resolveTextVariables(h.value || '', envSnapshot);
+  const rows = Array.isArray(headersArray)
+    ? headersArray.filter(header => header.enabled !== false && header.key).map(header => [header.key, header.value || ''])
+    : Object.entries(headersArray || {});
+  rows.forEach(([key, value]) => {
+    if (key) {
+      const resolvedKey = resolveTextVariables(key, envSnapshot, localVariables);
+      const resolvedVal = resolveTextVariables(value || '', envSnapshot, localVariables);
       headers[resolvedKey] = resolvedVal;
     }
   });
@@ -1194,7 +1752,7 @@ function resolveHeadersObject(headersArray, envSnapshot) {
 }
 
 function getFlatBodyParams(fieldsArray, envSnapshot) {
-  return fieldsArray.map(item => {
+  return fieldsArray.filter(item => item.enabled !== false && item.key).map(item => {
     return {
       key: resolveTextVariables(item.key, envSnapshot),
       value: resolveTextVariables(item.value || '', envSnapshot),
@@ -1206,7 +1764,7 @@ function getFlatBodyParams(fieldsArray, envSnapshot) {
 }
 
 function injectAuthorizationToRequest(auth, headers, url, envSnapshot) {
-  if (!auth || auth.type === 'none') return;
+  if (!auth || auth.type === 'none') return url;
 
   if (auth.type === 'bearer' && auth.bearerToken) {
     const token = resolveTextVariables(auth.bearerToken, envSnapshot);
@@ -1221,11 +1779,13 @@ function injectAuthorizationToRequest(auth, headers, url, envSnapshot) {
     const value = resolveTextVariables(auth.value || '', envSnapshot);
     if (auth.in === 'header') {
       headers[key] = value;
+    } else {
+      const urlObj = new URL(url);
+      urlObj.searchParams.set(key, value);
+      url = urlObj.toString();
     }
-    // Note: query parameters injection would require modifying URL in caller scope.
-    // In sendActiveRequest resolvedUrl is computed. For api key in query params,
-    // we handled it in address bar or will inject it directly in url before query.
   }
+  return url;
 }
 
 /**
@@ -1693,19 +2253,28 @@ function setupSaveModalListeners() {
 
     // Load Collections select dropdown
     const select = document.getElementById('save-req-collection');
-    select.innerHTML = '';
-    
+    select.replaceChildren();
+    collections.forEach(collection => {
+      const option = document.createElement('option');
+      option.value = collection.id;
+      option.textContent = collection.name;
+      select.appendChild(option);
+    });
     if (collections.length === 0) {
-      select.innerHTML = `<option value="">(No Collections Available)</option>`;
-    } else {
-      collections.forEach(c => {
-        select.innerHTML += `<option value="${c.id}">${c.name}</option>`;
-      });
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = '(No Collections Available)';
+      select.appendChild(option);
     }
 
+    if (activeTab.savedCollectionId && collections.some(c => String(c.id) === String(activeTab.savedCollectionId))) {
+      select.value = String(activeTab.savedCollectionId);
+    }
     document.getElementById('save-req-name').value = activeTab.name || 'New Request';
-    document.getElementById('save-req-desc').value = '';
-
+    document.getElementById('save-req-desc').value = activeTab.description || '';
+    document.querySelector('#modal-save-request .modal-header h2').textContent =
+      activeTab.savedRequestId ? 'Update Saved Request' : 'Save Request';
+    confirmBtn.textContent = activeTab.savedRequestId ? 'Update' : 'Save';
 
     modal.classList.add('active');
   });
@@ -1724,7 +2293,7 @@ function setupSaveModalListeners() {
       return;
     }
 
-    const coll = collections.find(c => c.id === collId);
+    const coll = collections.find(c => String(c.id) === String(collId));
     if (coll) {
       const activeTab = getActiveTab();
       if (activeTab) {
@@ -1733,9 +2302,18 @@ function setupSaveModalListeners() {
         activeTab.method = document.getElementById('request-method').value;
         activeTab.headers = getRowsDataFromTable('headers');
         
-        // Formulate request object
+        const sourceCollection = activeTab.savedCollectionId
+          ? collections.find(c => String(c.id) === String(activeTab.savedCollectionId))
+          : null;
+        const sourceRequest = sourceCollection && sourceCollection.requests
+          ? sourceCollection.requests.find(r => String(r.id) === String(activeTab.savedRequestId))
+          : null;
+        const requestId = sourceRequest ? sourceRequest.id : `req-${Date.now()}`;
+
+        // Formulate request object while preserving the original record identity.
         const requestToSave = {
-          id: `req-${Date.now()}`,
+          ...(sourceRequest || {}),
+          id: requestId,
           name: nameVal,
           description: descVal,
           method: activeTab.method,
@@ -1752,16 +2330,34 @@ function setupSaveModalListeners() {
         };
 
         coll.requests = coll.requests || [];
-        coll.requests.push(requestToSave);
+        const sameCollection = sourceCollection && String(sourceCollection.id) === String(coll.id);
+        const destinationRequest = coll.requests.find(r => String(r.id) === String(requestId));
+        if (sameCollection && destinationRequest) {
+          Object.assign(destinationRequest, requestToSave);
+        } else {
+          if (sourceRequest && sourceCollection) {
+            sourceCollection.requests = sourceCollection.requests.filter(r => String(r.id) !== String(requestId));
+          }
+          if (destinationRequest) {
+            Object.assign(destinationRequest, requestToSave);
+          } else {
+            coll.requests.push(requestToSave);
+          }
+        }
         saveCollections();
         
-        // Update active tab name to saved value
+        activeTab.savedCollectionId = coll.id;
+        activeTab.savedRequestId = requestId;
+        activeTab.description = descVal;
         activeTab.name = nameVal;
+        saveTabsState();
         renderTabsUI();
         renderCollections();
         populateRunnerSelects();
         
         modal.classList.remove('active');
+        document.querySelector('#modal-save-request .modal-header h2').textContent = 'Save Request';
+        confirmBtn.textContent = 'Save';
       }
     }
   });
@@ -1807,6 +2403,9 @@ function setupSaveModalListeners() {
         }
 
         if (importedColl) {
+          (importedColl.requests || []).forEach(request => {
+            if (request.auth && request.auth.type === 'oauth2') request.auth = removeOAuthSecrets(request.auth);
+          });
           collections.push(importedColl);
           saveCollections();
           renderCollections();
@@ -1827,6 +2426,13 @@ function setupSaveModalListeners() {
   const sidebarContainer = document.getElementById('collections-list');
   sidebarContainer.addEventListener('click', (e) => {
     const target = e.target;
+
+    const exportCollBtn = target.closest('.btn-export-coll');
+    if (exportCollBtn) {
+      e.stopPropagation();
+      exportCollection(exportCollBtn.dataset.id);
+      return;
+    }
     
     // 1. Delete Collection
     const delCollBtn = target.closest('.btn-delete-coll');
@@ -1861,6 +2467,8 @@ function setupSaveModalListeners() {
             auth: { type: 'none' },
             bodyType: 'none',
             body: '',
+            formdata: [],
+            urlencoded: [],
             preRequestScript: '',
             testsScript: ''
           });
@@ -1887,18 +2495,56 @@ function setupSaveModalListeners() {
     // 5. Load request from sidebar into workspace tabs
     const reqItem = target.closest('.coll-req-item');
     if (reqItem) {
-      console.log("[DEBUG] reqItem activated instead!");
       const reqId = reqItem.dataset.id;
       const collId = reqItem.dataset.collId;
-      const coll = collections.find(c => c.id === collId);
+      const coll = collections.find(c => String(c.id) === String(collId));
       if (coll && coll.requests) {
-        const req = coll.requests.find(r => r.id === reqId);
+        const req = coll.requests.find(r => String(r.id) === String(reqId));
         if (req) {
-          createNewTab(req);
+          createNewTab({
+            ...req,
+            savedCollectionId: coll.id,
+            savedRequestId: req.id,
+            formdata: req.formdata || req.formData || [],
+            description: req.description || ''
+          });
         }
       }
     }
   });
+}
+
+function exportCollection(collectionId) {
+  const collection = collections.find(item => String(item.id) === String(collectionId));
+  if (!collection) return;
+  const safeCollection = stripCollectionCredentials(collection);
+  const blob = new Blob([JSON.stringify(safeCollection, null, 2)], { type: 'application/json' });
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = `${(collection.name || 'collection').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+function stripCollectionCredentials(collection) {
+  const safeCollection = stripOAuthSecrets(collection);
+  const isVariableReference = value => typeof value === 'string' && /^\{\{[^}]+\}\}$/.test(value.trim());
+  (safeCollection.requests || []).forEach(request => {
+    const auth = request.auth || {};
+    if (auth.type === 'bearer' && !isVariableReference(auth.bearerToken)) auth.bearerToken = '';
+    if (auth.type === 'basic') auth.password = '';
+    if (auth.type === 'apikey' && !isVariableReference(auth.value)) auth.value = '';
+    (Array.isArray(request.headers) ? request.headers : []).forEach(header => {
+      if (/^(authorization|proxy-authorization|cookie|set-cookie)$/i.test(header.key || '') ||
+          /(api[-_]?key|token|secret|password)/i.test(header.key || '')) {
+        if (!isVariableReference(header.value)) header.value = '';
+      }
+    });
+  });
+  return safeCollection;
 }
 
 /**
@@ -1908,79 +2554,146 @@ function parsePostmanCollection(postmanJson) {
   const coll = {
     id: `coll-imported-${Date.now()}`,
     name: postmanJson.info.name || 'Imported Postman Collection',
+    variables: Array.isArray(postmanJson.variable)
+      ? postmanJson.variable.reduce((values, variable) => {
+        if (variable.disabled !== true && variable.key) {
+          values[variable.key] = variable.value == null ? '' : String(variable.value);
+        }
+        return values;
+      }, {})
+      : {},
     requests: []
   };
 
-  function traverseItems(itemArray) {
+  const readAuth = auth => {
+    if (!auth || auth.type === 'noauth') return { type: 'none' };
+    const values = (auth[auth.type] || []).reduce((result, item) => {
+      result[item.key] = item.value == null ? '' : item.value;
+      return result;
+    }, {});
+    if (auth.type === 'bearer') return { type: 'bearer', bearerToken: values.token || '' };
+    if (auth.type === 'basic') return { type: 'basic', username: values.username || '', password: values.password || '' };
+    if (auth.type === 'apikey') {
+      return { type: 'apikey', key: values.key || '', value: values.value || '', in: values.in || 'header' };
+    }
+    if (auth.type === 'oauth2') {
+      const grantType = values.code_challenge_method
+        ? 'authorization_code_pkce'
+        : values.grant_type || 'client_credentials';
+      return removeOAuthSecrets({
+        type: 'oauth2',
+        oauthGrantType: grantType,
+        oauthClientId: values.clientId || values.client_id || '',
+        oauthClientSecret: values.clientSecret || values.client_secret || '',
+        oauthTokenUrl: values.accessTokenUrl || values.tokenUrl || values.token_url || '',
+        oauthAuthorizationUrl: values.authUrl || values.authorizationUrl || values.auth_url || '',
+        oauthScope: values.scope || '',
+        oauthUsername: values.username || '',
+        oauthPassword: values.password || '',
+        oauthAccessToken: values.accessToken || values.access_token || '',
+        oauthRefreshToken: values.refreshToken || values.refresh_token || ''
+      });
+    }
+    return { type: 'none' };
+  };
+  const readEvents = item => (Array.isArray(item.event) ? item.event : []).reduce((scripts, event) => {
+    const source = event.script && Array.isArray(event.script.exec) ? event.script.exec.join('\n') : '';
+    if (event.listen === 'prerequest' && source) scripts.preRequest.push(source);
+    if (event.listen === 'test' && source) scripts.tests.push(source);
+    return scripts;
+  }, { preRequest: [], tests: [] });
+  const combineScripts = (events, key) => events.map(event => event[key]).filter(Boolean).join('\n');
+
+  function traverseItems(itemArray, folderPath = [], inheritedAuth = null, inheritedEvents = []) {
     itemArray.forEach(item => {
       if (item.request) {
-        // It's a request item
         const pmReq = item.request;
-        
-        // Parse URL
-        let urlStr = '';
-        if (typeof pmReq.url === 'string') {
-          urlStr = pmReq.url;
-        } else if (pmReq.url && pmReq.url.raw) {
-          urlStr = pmReq.url.raw;
+        const url = typeof pmReq.url === 'string' ? null : pmReq.url;
+        let urlStr = typeof pmReq.url === 'string' ? pmReq.url : url && url.raw || '';
+        if (!urlStr && url) {
+          const protocol = url.protocol ? `${url.protocol}://` : '';
+          const host = Array.isArray(url.host) ? url.host.join('.') : (url.host || '');
+          const path = Array.isArray(url.path) ? url.path.join('/') : (url.path || '');
+          const query = (url.query || [])
+            .filter(parameter => parameter.disabled !== true && parameter.key)
+            .map(parameter => `${encodeURIComponent(parameter.key)}=${encodeURIComponent(parameter.value || '')}`)
+            .join('&');
+          urlStr = `${protocol}${host}${path ? `/${path}` : ''}${query ? `?${query}` : ''}`;
         }
-
-        // Parse Headers
-        const headers = [];
-        if (Array.isArray(pmReq.header)) {
-          pmReq.header.forEach(h => {
-            headers.push({
-              key: h.key,
-              value: h.value || '',
-              enabled: h.disabled !== true,
-              description: h.description || ''
-            });
-          });
+        const headers = (pmReq.header || []).map(header => ({
+          key: header.key || '',
+          value: header.value || '',
+          enabled: header.disabled !== true,
+          description: typeof header.description === 'string' ? header.description : (header.description && header.description.content) || ''
+        }));
+        const body = pmReq.body || {};
+        let bodyType = body.mode || 'none';
+        let bodyContent = body.raw || '';
+        let formdata = [];
+        let urlencoded = [];
+        if (bodyType === 'formdata') {
+          bodyType = 'form-data';
+          formdata = (body.formdata || []).map(field => ({
+            key: field.key || '',
+            value: field.value || '',
+            type: field.type === 'file' ? 'file' : 'text',
+            fileName: typeof field.src === 'string' ? field.src.split(/[\\/]/).pop() : '',
+            fileData: '',
+            enabled: field.disabled !== true
+          }));
+        } else if (bodyType === 'urlencoded') {
+          urlencoded = (body.urlencoded || []).map(field => ({
+            key: field.key || '',
+            value: field.value || '',
+            enabled: field.disabled !== true
+          }));
+        } else if (bodyType !== 'raw') {
+          bodyType = 'none';
         }
-
-        // Parse Body
-        let bodyType = 'none';
-        let bodyContent = '';
-        if (pmReq.body) {
-          bodyType = pmReq.body.mode === 'raw' ? 'raw' : pmReq.body.mode;
-          if (pmReq.body.raw) {
-            bodyContent = pmReq.body.raw;
-          }
-        }
-
-        // Parse scripts
-        let preRequestScript = '';
-        let testsScript = '';
-        if (Array.isArray(item.event)) {
-          item.event.forEach(ev => {
-            if (ev.listen === 'prerequest' && ev.script && Array.isArray(ev.script.exec)) {
-              preRequestScript = ev.script.exec.join('\n');
-            } else if (ev.listen === 'test' && ev.script && Array.isArray(ev.script.exec)) {
-              testsScript = ev.script.exec.join('\n');
-            }
-          });
-        }
+        const requestEvents = readEvents(item);
+        const effectiveAuth = pmReq.auth && pmReq.auth.type !== 'inherit'
+          ? readAuth(pmReq.auth)
+          : inheritedAuth || readAuth(postmanJson.auth);
+        const rawType = body.options && body.options.raw && body.options.raw.language;
+        const importedContentType = headers.find(header => header.key.toLowerCase() === 'content-type');
+        const bodyRawType = rawType === 'json' ? 'application/json'
+          : rawType === 'xml' ? 'application/xml'
+            : rawType === 'html' ? 'text/html'
+              : importedContentType ? importedContentType.value : 'text/plain';
 
         coll.requests.push({
           id: `req-imported-${Date.now()}-${Math.random().toString(36).substring(2,6)}`,
           name: item.name || 'Unnamed Request',
+          folderPath: folderPath.join('/'),
+          description: typeof item.request.description === 'string'
+            ? item.request.description
+            : (item.request.description && item.request.description.content) || '',
           method: pmReq.method || 'GET',
           url: urlStr,
-          headers: headers,
-          auth: { type: 'none' }, // fallback
-          bodyType: bodyType === 'raw' ? 'raw' : 'none',
+          headers,
+          auth: effectiveAuth,
+          bodyType,
+          bodyRawType,
           body: bodyContent,
-          preRequestScript: preRequestScript,
-          testsScript: testsScript
+          formdata,
+          urlencoded,
+          preRequestScript: combineScripts([...inheritedEvents, requestEvents], 'preRequest'),
+          testsScript: combineScripts([...inheritedEvents, requestEvents], 'tests')
         });
       } else if (item.item) {
-        // Recursive folder traversal
-        traverseItems(item.item);
+        const folderEvents = readEvents(item);
+        const folderAuth = item.auth && item.auth.type !== 'inherit' ? readAuth(item.auth) : inheritedAuth;
+        traverseItems(
+          item.item,
+          [...folderPath, item.name || 'Folder'],
+          folderAuth,
+          [...inheritedEvents, folderEvents]
+        );
       }
     });
   }
 
-  traverseItems(postmanJson.item || []);
+  traverseItems(postmanJson.item || [], [], readAuth(postmanJson.auth), [readEvents(postmanJson)]);
   return coll;
 }
 
