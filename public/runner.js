@@ -373,10 +373,10 @@ function renderRunnerRequestList(collId) {
 
     const safeRunnerReqName = (req.name || '').replace(/"/g, '&quot;');
     listContainer.innerHTML += `
-      <label class="runner-request-item coll-req-item" style="padding: 4px 8px;">
+      <label class="runner-request-item coll-req-item">
         <input type="checkbox" class="runner-req-checkbox" value="${req.id}" checked>
         <div class="coll-req-title-wrapper">
-          <span class="history-method ${methodClass}" style="font-size: 8px; padding: 1px 3px; min-width: 32px;">${req.method}</span>
+          <span class="history-method ${methodClass}">${req.method}</span>
           <span class="coll-req-title" title="${safeRunnerReqName}">${req.name}</span>
         </div>
       </label>

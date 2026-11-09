@@ -57,7 +57,7 @@ function setupAppearanceControls() {
   const themeSelect = document.getElementById('appearance-theme');
   const accentInput = document.getElementById('appearance-accent');
   const densitySelect = document.getElementById('appearance-density');
-  const defaultAccent = '#ff7954';
+  const defaultAccent = '#4c9aff';
 
   if (!modal || openButtons.length === 0 || !themeSelect || !accentInput || !densitySelect) {
     throw new Error('Appearance controls are missing from the page.');

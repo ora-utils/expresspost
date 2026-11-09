@@ -11,7 +11,11 @@
     <script>
         (() => {
             const theme = localStorage.getItem('expresspost_theme');
-            const accent = localStorage.getItem('expresspost_accent');
+            let accent = localStorage.getItem('expresspost_accent');
+            if (accent === '#ff7954') {
+                accent = '#4c9aff';
+                localStorage.setItem('expresspost_accent', accent);
+            }
             const density = localStorage.getItem('expresspost_density');
             if (['dark', 'midnight', 'light'].includes(theme)) document.documentElement.dataset.theme = theme;
             if (accent && /^#[\da-f]{6}$/i.test(accent)) document.documentElement.style.setProperty('--primary', accent);
@@ -140,8 +144,8 @@
                     <i class="fa-solid fa-circle-play"></i> Collection Runner
                 </button>
                 <div class="console-trigger-wrapper">
-                    <button id="btn-toggle-console" class="console-btn" aria-label="Toggle Console">
-                        <i class="fa-solid fa-terminal"></i> Console (<span id="console-log-count">0</span>)
+                    <button id="btn-toggle-console" class="console-btn" aria-label="Toggle Terminal">
+                        <i class="fa-solid fa-terminal"></i> Terminal (<span id="console-log-count">0</span>)
                     </button>
                 </div>
             </div>
@@ -447,14 +451,14 @@
                                 </div>
                                 <div class="script-layout">
                                     <div id="pre-request-editor" class="ace-editor-container script-editor"></div>
-                                    <div class="script-snippets">
-                                        <h4>Pre-request helpers</h4>
+                                    <details class="script-snippets">
+                                        <summary>Pre-request helpers</summary>
                                         <button class="snippet-btn" data-snippet-target="pre-request" data-snippet="set-env">Set environment variable</button>
                                         <button class="snippet-btn" data-snippet-target="pre-request" data-snippet="set-global">Set global variable</button>
                                         <button class="snippet-btn" data-snippet-target="pre-request" data-snippet="timestamp">Create timestamp</button>
                                         <button class="snippet-btn" data-snippet-target="pre-request" data-snippet="random-id">Create random ID</button>
                                         <button class="snippet-btn" data-snippet-target="pre-request" data-snippet="add-header">Add request header</button>
-                                    </div>
+                                    </details>
                                 </div>
                             </div>
 
@@ -466,15 +470,15 @@
                                 </div>
                                 <div class="script-layout">
                                     <div id="tests-editor" class="ace-editor-container script-editor"></div>
-                                    <div class="script-snippets">
-                                        <h4>Post-response helpers</h4>
+                                    <details class="script-snippets">
+                                        <summary>Post-response helpers</summary>
                                         <button class="snippet-btn" data-snippet-target="tests" data-snippet="status-200">Assert status is 200</button>
                                         <button class="snippet-btn" data-snippet-target="tests" data-snippet="json-val">Assert JSON property</button>
                                         <button class="snippet-btn" data-snippet-target="tests" data-snippet="contains-string">Assert body contains text</button>
                                         <button class="snippet-btn" data-snippet-target="tests" data-snippet="set-env">Save response token</button>
                                         <button class="snippet-btn" data-snippet-target="tests" data-snippet="response-time">Assert response time</button>
                                         <button class="snippet-btn" data-snippet-target="tests" data-snippet="content-type">Assert JSON content type</button>
-                                    </div>
+                                    </details>
                                 </div>
                             </div>
 
@@ -562,6 +566,17 @@
                 </div>
             </div>
         </main>
+
+        <footer class="workspace-status-bar">
+            <div class="status-left">
+                <span><i class="fa-solid fa-code-branch"></i> Workspace</span>
+                <span><i class="fa-solid fa-circle-check"></i> Ready</span>
+            </div>
+            <div class="status-right">
+                <span class="developer-credit">Developer: Chitikesi SravanKumar</span>
+                <span>ExpressPost</span>
+            </div>
+        </footer>
     </div>
 
     <div class="modal-overlay hidden" id="appearance-modal">
@@ -676,7 +691,7 @@
     <!-- Console Panel Footer Console -->
     <div class="dev-console hidden" id="dev-console-panel">
         <div class="console-header">
-            <div class="console-title"><i class="fa-solid fa-terminal"></i> AeroPost Execution Console</div>
+            <div class="console-title"><i class="fa-solid fa-terminal"></i> Terminal <span class="terminal-subtitle">· Script output</span></div>
             <div class="console-actions">
                 <button id="btn-clear-console" class="btn btn-sm btn-secondary"><i class="fa-solid fa-ban"></i> Clear</button>
                 <button id="btn-close-console" class="btn btn-sm btn-secondary" aria-label="Close Console">&times;</button>
@@ -718,7 +733,7 @@
                     </div>
 
                     <div id="runner-request-list" class="runner-request-list card runner-field-full hidden">
-                        <h4 style="margin: 0 0 8px 0; font-size: 13px; color: var(--text-main); font-weight: 600;">Requests to Run</h4>
+                        <h4>Requests to Run</h4>
                         <div id="runner-request-checklist" class="checklist-container">
                             <!-- Dynamic checkboxes -->
                         </div>
@@ -742,7 +757,7 @@
                             </span>
                         </summary>
                         <div class="form-group mb-0">
-                            <label for="runner-data-file" class="btn btn-secondary w-100" style="border-style: dashed; padding: 12px; font-weight: normal; font-size: 13px;">
+                            <label for="runner-data-file" class="btn btn-secondary w-100 runner-data-file-picker">
                                 <i class="fa-solid fa-file-import"></i> Select CSV or JSON File
                             </label>
                             <input type="file" id="runner-data-file" accept=".csv,.json" class="hidden">
@@ -785,7 +800,7 @@
                             </div>
                             <p class="help-text">Use Sequential for token handoffs. Parallel requests use separate variable snapshots and cannot depend on one another.</p>
                         </div>
-                        <div class="form-group hidden" id="runner-thread-setting" style="margin-top: 8px;">
+                        <div class="form-group hidden" id="runner-thread-setting">
                             <label for="runner-threads">Execution Threads (Workers)</label>
                             <div class="slider-container">
                                 <input type="range" id="runner-threads" min="1" max="100" value="10" class="slider">
