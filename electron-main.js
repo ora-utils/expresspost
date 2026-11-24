@@ -1,33 +1,50 @@
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, shell } = require('electron');
 const path = require('path');
 const net = require('net');
 
 let expressServer = null;
 let mainWindow = null;
 
-// Dynamically scans for available ports starting from a given port
-function findAvailablePort(startPort) {
+// Dynamically scans for available ports starting from a given port on IPv4 loopback
+function findAvailablePort(startPort, host = '127.0.0.1') {
   return new Promise((resolve) => {
     const server = net.createServer();
-    server.listen(startPort, () => {
+    server.listen(startPort, host, () => {
       const { port } = server.address();
       server.close(() => {
         resolve(port);
       });
     });
     server.on('error', () => {
-      resolve(findAvailablePort(startPort + 1));
+      resolve(findAvailablePort(startPort + 1, host));
     });
   });
 }
 
+function stopExpressServer() {
+  if (expressServer) {
+    try {
+      if (typeof expressServer.closeAllConnections === 'function') {
+        expressServer.closeAllConnections();
+      }
+      expressServer.close();
+    } catch (e) {
+      // Ignore shutdown errors
+    }
+    expressServer = null;
+  }
+}
+
 function createMainWindow(port) {
+  const appOrigin = `http://127.0.0.1:${port}`;
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
-    title: 'CSK RestRunner - Premium API Client & Runner',
+    minWidth: 900,
+    minHeight: 600,
+    title: 'ExpressPost - Premium API Client & Runner',
     icon: path.join(__dirname, 'public', 'logo.png'),
-    backgroundColor: '#070a16',
+    backgroundColor: '#171a20',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -35,8 +52,39 @@ function createMainWindow(port) {
     }
   });
 
+  // Allow OAuth popups in child windows; open unexpected external links in default browser
+  mainWindow.webContents.setWindowOpenHandler(({ url, frameName }) => {
+    if (frameName === 'expresspost-oauth' || url === 'about:blank' || url.startsWith(appOrigin)) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 700,
+          height: 800,
+          parent: mainWindow,
+          autoHideMenuBar: true,
+          webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true
+          }
+        }
+      };
+    }
+    if (/^https?:\/\//i.test(url)) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  // Prevent accidental main-window navigation away from ExpressPost
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith(appOrigin)) {
+      event.preventDefault();
+    }
+  });
+
   // Load local server URL
-  mainWindow.loadURL(`http://localhost:${port}`);
+  mainWindow.loadURL(appOrigin);
 
   // Customize standard application menu to enable hotkeys (devtools, zoom, copy/paste)
   const template = [
@@ -85,9 +133,9 @@ function createMainWindow(port) {
 // Startup lifecycle
 app.on('ready', async () => {
   try {
-    const port = await findAvailablePort(3000);
+    const port = await findAvailablePort(45123, '127.0.0.1');
     const { startServer } = require('./server');
-    expressServer = await startServer(port);
+    expressServer = await startServer(port, '127.0.0.1');
     createMainWindow(port);
   } catch (err) {
     console.error('Failed to initialize application:', err);
@@ -97,18 +145,11 @@ app.on('ready', async () => {
 
 // App shutdown lifecycle
 app.on('window-all-closed', () => {
-  // Terminate express server
-  if (expressServer) {
-    expressServer.close();
-  }
-  
+  stopExpressServer();
   if (process.platform !== 'darwin') {
     app.quit();
   }
 });
 
-app.on('quit', () => {
-  if (expressServer) {
-    expressServer.close();
-  }
-});
+app.on('before-quit', stopExpressServer);
+app.on('quit', stopExpressServer);

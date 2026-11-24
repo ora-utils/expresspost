@@ -1,43 +1,55 @@
 /**
- * AeroPost Collection Runner Worker
+ * ExpressPost Collection Runner Worker
  * Executes requests, evaluates pre-request/test scripts in a background thread,
  * and communicates results back to the main runner thread.
  */
 
-// Import the sandbox library
-importScripts('sandbox.js');
+importScripts('utils.js', 'sandbox.js');
 
-// Listen for execution commands from the main thread
 self.onmessage = async function(e) {
-  const { action, request, globals, environment, proxyUrl, engine, iterationData } = e.data;
+  const { action, request, globals, environment, proxyUrl, engine, iterationData, meta } = e.data;
 
   if (action === 'run_request') {
     try {
-      const result = await executeRequestInWorker(request, globals, environment, proxyUrl, engine, iterationData);
+      const result = await executeRequestInWorker(request, globals, environment, proxyUrl, engine, iterationData, meta);
       self.postMessage({ status: 'success', result });
     } catch (error) {
       self.postMessage({
         status: 'error',
         error: error.message,
-        requestId: request.id
+        requestId: request && request.id
       });
     }
   }
 };
 
+function makeScopes(globals, environment, collectionVariables, iterationData, localVariables) {
+  return {
+    globals: globals || {},
+    collectionVariables: collectionVariables || {},
+    environment: environment || {},
+    iterationData: iterationData || {},
+    localVariables: localVariables || {}
+  };
+}
+
 /**
  * Executes a single API request, running pre-request and post-response assertion scripts
  */
-async function executeRequestInWorker(req, globals, environment, proxyUrl, engine, iterationData = {}) {
-  let requestGlobals = { ...globals };
-  let requestEnv = { ...environment };
+async function executeRequestInWorker(req, globals, environment, proxyUrl, engine, iterationData = {}, meta = {}) {
+  let requestGlobals = { ...(globals || {}) };
+  let requestEnv = { ...(environment || {}) };
   let requestCollectionVariables = { ...(req.collectionVariables || {}) };
   let requestLocalVariables = {};
-  let requestUrl = req.url;
-  let requestMethod = req.method;
-  let requestBodyType = req.bodyType;
+  const safeIterationData = { ...(iterationData || {}) };
+
+  let requestUrl = req.url || '';
+  let requestMethod = req.method || 'GET';
+  let requestBodyType = req.bodyType || 'none';
+  const requestBodyRawType = req.bodyRawType || 'application/json';
   let requestHeaders = getHeadersObject(req.headers);
   let preRequestResults = [];
+  let nextRequest = undefined;
   let requestBody = requestBodyType === 'form-data'
     ? (req.formdata || req.formData || [])
     : requestBodyType === 'urlencoded'
@@ -52,7 +64,14 @@ async function executeRequestInWorker(req, globals, environment, proxyUrl, engin
       environment: requestEnv,
       collectionVariables: requestCollectionVariables,
       localVariables: requestLocalVariables,
-      iterationData,
+      iterationData: safeIterationData,
+      info: {
+        eventName: 'prerequest',
+        requestName: req.name || '',
+        requestId: req.id || '',
+        iteration: meta.iteration || 1,
+        iterationCount: meta.iterationCount || 1
+      },
       sendRequest: options => executeScriptRequest(options, engine, proxyUrl),
       request: {
         url: requestUrl,
@@ -62,8 +81,7 @@ async function executeRequestInWorker(req, globals, environment, proxyUrl, engin
         bodyType: requestBodyType
       }
     });
-    
-    // Capture mutations
+
     requestGlobals = preSandboxResult.globals;
     requestEnv = preSandboxResult.environment;
     requestCollectionVariables = preSandboxResult.collectionVariables;
@@ -74,20 +92,20 @@ async function executeRequestInWorker(req, globals, environment, proxyUrl, engin
     requestHeaders = preSandboxResult.request.headers || requestHeaders;
     requestBody = preSandboxResult.request.body;
     requestBodyType = preSandboxResult.request.bodyType || requestBodyType;
+    if (preSandboxResult.nextRequest !== undefined) {
+      nextRequest = preSandboxResult.nextRequest;
+    }
     preRequestLogs = preSandboxResult.logs;
   }
 
   // 2. Resolve Variables
-  let resolvedUrl = resolveVariables(requestUrl, requestGlobals, requestEnv, requestLocalVariables, requestCollectionVariables);
-  const resolvedHeaders = resolveHeaders(requestHeaders, requestGlobals, requestEnv, requestLocalVariables, requestCollectionVariables);
-  const resolvedBody = resolveRequestBody(requestBody, requestBodyType, requestGlobals, requestEnv, requestLocalVariables, requestCollectionVariables);
+  const scopes = makeScopes(requestGlobals, requestEnv, requestCollectionVariables, safeIterationData, requestLocalVariables);
+  let resolvedUrl = resolveVariables(requestUrl, scopes);
+  const resolvedHeaders = resolveHeaders(requestHeaders, scopes);
+  const resolvedBody = resolveRequestBody(requestBody, requestBodyType, scopes);
 
   // 3. Inject Authorization
-  resolvedUrl = injectAuthorization(req.auth, resolvedHeaders, resolvedUrl, requestGlobals, {
-    ...requestEnv,
-    ...requestCollectionVariables,
-    ...requestLocalVariables
-  });
+  resolvedUrl = injectAuthorization(req.auth, resolvedHeaders, resolvedUrl, scopes);
 
   // 4. Send HTTP Request (Direct or Proxy Mode)
   let responseData = null;
@@ -95,12 +113,11 @@ async function executeRequestInWorker(req, globals, environment, proxyUrl, engin
 
   try {
     if (engine === 'proxy') {
-      responseData = await executeProxyRequest(proxyUrl, requestMethod, resolvedUrl, resolvedHeaders, resolvedBody, requestBodyType);
+      responseData = await executeProxyRequest(proxyUrl, requestMethod, resolvedUrl, resolvedHeaders, resolvedBody, requestBodyType, requestBodyRawType);
     } else {
-      responseData = await executeDirectRequest(requestMethod, resolvedUrl, resolvedHeaders, resolvedBody, requestBodyType);
+      responseData = await executeDirectRequest(requestMethod, resolvedUrl, resolvedHeaders, resolvedBody, requestBodyType, requestBodyRawType);
     }
   } catch (err) {
-    // Return connection failure representation
     responseData = {
       status: 0,
       statusText: 'Connection Failed',
@@ -113,14 +130,21 @@ async function executeRequestInWorker(req, globals, environment, proxyUrl, engin
 
   // 5. Run Test Scripts
   let testLogs = [];
-  let testResults = preRequestResults;
+  const testResults = preRequestResults;
   if (req.testsScript && req.testsScript.trim() !== '') {
     const testSandboxResult = await runScriptSandbox(req.testsScript, {
       globals: requestGlobals,
       environment: requestEnv,
       collectionVariables: requestCollectionVariables,
       localVariables: requestLocalVariables,
-      iterationData,
+      iterationData: safeIterationData,
+      info: {
+        eventName: 'test',
+        requestName: req.name || '',
+        requestId: req.id || '',
+        iteration: meta.iteration || 1,
+        iterationCount: meta.iterationCount || 1
+      },
       sendRequest: options => executeScriptRequest(options, engine, proxyUrl),
       request: {
         url: resolvedUrl,
@@ -131,11 +155,13 @@ async function executeRequestInWorker(req, globals, environment, proxyUrl, engin
       response: responseData
     });
 
-    // Capture mutations & outputs
     requestGlobals = testSandboxResult.globals;
     requestEnv = testSandboxResult.environment;
     requestCollectionVariables = testSandboxResult.collectionVariables;
     requestLocalVariables = testSandboxResult.localVariables;
+    if (testSandboxResult.nextRequest !== undefined) {
+      nextRequest = testSandboxResult.nextRequest;
+    }
     testLogs = testSandboxResult.logs;
     testResults.push(...testSandboxResult.testResults);
   }
@@ -145,34 +171,17 @@ async function executeRequestInWorker(req, globals, environment, proxyUrl, engin
     requestName: req.name,
     method: requestMethod,
     url: resolvedUrl,
-    requestBody: typeof resolvedBody === 'string' ? resolvedBody : JSON.stringify(resolvedBody),
+    requestBody: typeof resolvedBody === 'string' ? resolvedBody : (resolvedBody ? JSON.stringify(resolvedBody) : ''),
     globals: requestGlobals,
     environment: requestEnv,
     collectionVariables: requestCollectionVariables,
+    nextRequest,
     logs: [...preRequestLogs, ...testLogs],
     testResults: testResults,
     response: responseData
   };
 }
 
-/**
- * Replaces double curly brace variables {{my_var}} in strings
- */
-function resolveVariables(str, globals, environment, localVariables = {}, collectionVariables = {}) {
-  if (typeof str !== 'string') return str;
-  return str.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
-    const trimmedKey = key.trim();
-    if (trimmedKey in localVariables) return localVariables[trimmedKey];
-    if (trimmedKey in environment) return environment[trimmedKey];
-    if (trimmedKey in collectionVariables) return collectionVariables[trimmedKey];
-    if (trimmedKey in globals) return globals[trimmedKey];
-    return match;
-  });
-}
-
-/**
- * Returns header key-values as flat object
- */
 function getHeadersObject(headersArray) {
   const headers = {};
   if (Array.isArray(headersArray)) {
@@ -185,46 +194,38 @@ function getHeadersObject(headersArray) {
   return headers;
 }
 
-/**
- * Resolves headers list keys & values
- */
-function resolveHeaders(headersArray, globals, environment, localVariables = {}, collectionVariables = {}) {
+function resolveHeaders(headersArray, scopes) {
   const headers = {};
   if (Array.isArray(headersArray)) {
     headersArray.forEach(h => {
       if (h.enabled !== false && h.key) {
-        const resolvedKey = resolveVariables(h.key, globals, environment, localVariables, collectionVariables);
-        const resolvedVal = resolveVariables(h.value || '', globals, environment, localVariables, collectionVariables);
+        const resolvedKey = resolveVariables(h.key, scopes);
+        const resolvedVal = resolveVariables(h.value || '', scopes);
         headers[resolvedKey] = resolvedVal;
       }
     });
   } else {
     Object.entries(headersArray || {}).forEach(([key, value]) => {
-      headers[resolveVariables(key, globals, environment, localVariables, collectionVariables)] =
-        resolveVariables(value || '', globals, environment, localVariables, collectionVariables);
+      headers[resolveVariables(key, scopes)] = resolveVariables(value || '', scopes);
     });
   }
   return headers;
 }
 
-/**
- * Resolves body parameters and structures form data or urlencoded inputs
- */
-function resolveRequestBody(body, bodyType, globals, environment, localVariables = {}, collectionVariables = {}) {
+function resolveRequestBody(body, bodyType, scopes) {
   if (bodyType === 'none') return null;
 
   if (bodyType === 'raw') {
-    return resolveVariables(body || '', globals, environment, localVariables, collectionVariables);
+    return resolveVariables(body || '', scopes);
   }
 
-  // Handle key-value body types (form-data, urlencoded)
   if (Array.isArray(body)) {
     const resolvedFields = [];
     body.forEach(item => {
       if (item.enabled !== false && item.key) {
         resolvedFields.push({
-          key: resolveVariables(item.key, globals, environment, localVariables, collectionVariables),
-          value: resolveVariables(item.value || '', globals, environment, localVariables, collectionVariables),
+          key: resolveVariables(item.key, scopes),
+          value: resolveVariables(item.value || '', scopes),
           type: item.type || 'text',
           fileName: item.fileName || '',
           fileData: item.fileData || ''
@@ -237,57 +238,51 @@ function resolveRequestBody(body, bodyType, globals, environment, localVariables
   return body;
 }
 
-/**
- * Injects basic, bearer, or apikey credentials into request headers or url
- */
-function injectAuthorization(auth, headers, url, globals, environment) {
+function injectAuthorization(auth, headers, url, scopes) {
   if (!auth || auth.type === 'none') return url;
 
   if (auth.type === 'bearer' && auth.bearerToken) {
-    const token = resolveVariables(auth.bearerToken, globals, environment);
+    const token = resolveVariables(auth.bearerToken, scopes);
     headers['Authorization'] = `Bearer ${token}`;
-  } 
-  
-  else if (auth.type === 'basic') {
-    const username = resolveVariables(auth.username || '', globals, environment);
-    const password = resolveVariables(auth.password || '', globals, environment);
+  } else if (auth.type === 'basic') {
+    const username = resolveVariables(auth.username || '', scopes);
+    const password = resolveVariables(auth.password || '', scopes);
     const hash = btoa(`${username}:${password}`);
     headers['Authorization'] = `Basic ${hash}`;
-  } 
-  else if (auth.type === 'oauth2') {
+  } else if (auth.type === 'oauth2') {
     if (!auth.oauthAccessToken) throw new Error('OAuth access token is missing. Get a token before starting the runner.');
     headers.Authorization = `Bearer ${auth.oauthAccessToken}`;
-  }
-  
-  else if (auth.type === 'apikey' && auth.key) {
-    const key = resolveVariables(auth.key, globals, environment);
-    const value = resolveVariables(auth.value || '', globals, environment);
-    
+  } else if (auth.type === 'apikey' && auth.key) {
+    const key = resolveVariables(auth.key, scopes);
+    const value = resolveVariables(auth.value || '', scopes);
+
     if (auth.in === 'header') {
       headers[key] = value;
     } else {
-      const urlObj = new URL(url);
-      urlObj.searchParams.set(key, value);
-      url = urlObj.toString();
+      try {
+        const urlObj = new URL(url);
+        urlObj.searchParams.set(key, value);
+        url = urlObj.toString();
+      } catch (e) {
+        const sep = url.includes('?') ? '&' : '?';
+        url = `${url}${sep}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+      }
     }
   }
   return url;
 }
 
-/**
- * Performs proxy request through Express server
- */
-async function executeProxyRequest(proxyUrl, method, url, headers, body, bodyType) {
-  // Set content-type automatically if missing and body exists
+async function executeProxyRequest(proxyUrl, method, url, headers, body, bodyType, bodyRawType = 'application/json') {
   const hasContentType = Object.keys(headers).some(key => key.toLowerCase() === 'content-type');
-  if (bodyType === 'raw' && !hasContentType) {
-    headers['content-type'] = 'application/json';
+  if (bodyType === 'raw' && body && !hasContentType) {
+    headers['content-type'] = bodyRawType || 'application/json';
   } else if (bodyType === 'urlencoded' && !hasContentType) {
     headers['content-type'] = 'application/x-www-form-urlencoded';
+  } else if (bodyType === 'form-data' && !hasContentType) {
+    headers['content-type'] = 'multipart/form-data';
   }
 
   let finalBody = body;
-  // Format urlencoded body list to a standard string
   if (bodyType === 'urlencoded' && Array.isArray(body)) {
     const params = new URLSearchParams();
     body.forEach(item => params.append(item.key, item.value));
@@ -296,9 +291,7 @@ async function executeProxyRequest(proxyUrl, method, url, headers, body, bodyTyp
 
   const response = await fetch(proxyUrl, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       url,
       method,
@@ -307,11 +300,12 @@ async function executeProxyRequest(proxyUrl, method, url, headers, body, bodyTyp
     })
   });
 
+  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(`Proxy error: ${response.statusText}`);
+    throw new Error(payload.message || payload.error || `Proxy error: ${response.statusText}`);
   }
 
-  return await response.json();
+  return payload;
 }
 
 async function executeScriptRequest(options, engine, proxyUrl) {
@@ -333,9 +327,6 @@ async function executeScriptRequest(options, engine, proxyUrl) {
     } else if (body.mode === 'formdata') {
       body = body.formdata || [];
       bodyType = 'form-data';
-      if (!Object.keys(headers).some(key => key.toLowerCase() === 'content-type')) {
-        headers['Content-Type'] = 'multipart/form-data';
-      }
     } else {
       body = body.raw;
       bodyType = body == null ? 'none' : 'raw';
@@ -349,11 +340,8 @@ async function executeScriptRequest(options, engine, proxyUrl) {
   return executeDirectRequest(method, url, headers, body, bodyType);
 }
 
-/**
- * Performs request directly from Web Worker browser environment
- */
-async function executeDirectRequest(method, url, headers, body, bodyType) {
-  let fetchOptions = {
+async function executeDirectRequest(method, url, headers, body, bodyType, bodyRawType = 'application/json') {
+  const fetchOptions = {
     method: method,
     headers: new Headers(headers)
   };
@@ -361,7 +349,7 @@ async function executeDirectRequest(method, url, headers, body, bodyType) {
   if (bodyType === 'raw' && body) {
     fetchOptions.body = body;
     if (!Object.keys(headers).some(key => key.toLowerCase() === 'content-type')) {
-      fetchOptions.headers.set('Content-Type', 'application/json');
+      fetchOptions.headers.set('Content-Type', bodyRawType || 'application/json');
     }
   } else if (bodyType === 'urlencoded' && Array.isArray(body)) {
     const params = new URLSearchParams();
@@ -372,11 +360,10 @@ async function executeDirectRequest(method, url, headers, body, bodyType) {
     const formData = new FormData();
     body.forEach(item => {
       if (item.type === 'file' && item.fileData) {
-        // Base64 decoding file simulation
-        const matches = item.fileData.match(/^data:(.+);base64,(.+)$/);
+        const matches = String(item.fileData).match(/^data:([^;,]*)(?:;[^,]*)?;base64,(.+)$/);
         if (matches) {
           const fileBuffer = base64ToArrayBuffer(matches[2]);
-          const blob = new Blob([fileBuffer], { type: matches[1] });
+          const blob = new Blob([fileBuffer], { type: matches[1] || 'application/octet-stream' });
           formData.append(item.key, blob, item.fileName || 'file');
         }
       } else {
@@ -384,7 +371,6 @@ async function executeDirectRequest(method, url, headers, body, bodyType) {
       }
     });
     fetchOptions.body = formData;
-    // Don't set Content-Type header; browser does it with boundaries automatically
     fetchOptions.headers.delete('Content-Type');
   }
 
@@ -392,14 +378,13 @@ async function executeDirectRequest(method, url, headers, body, bodyType) {
   const response = await fetch(url, fetchOptions);
   const duration = Date.now() - start;
 
-  // Convert response headers to simple object
   const responseHeaders = {};
   response.headers.forEach((val, key) => {
     responseHeaders[key] = val;
   });
 
   const responseText = await response.text();
-  const size = responseText.length; // Approximate size in characters
+  const size = getByteLength(responseText);
 
   return {
     status: response.status,
@@ -411,9 +396,6 @@ async function executeDirectRequest(method, url, headers, body, bodyType) {
   };
 }
 
-/**
- * Decodes base64 string to ArrayBuffer for Blob construction
- */
 function base64ToArrayBuffer(base64) {
   const binaryString = atob(base64);
   const len = binaryString.length;

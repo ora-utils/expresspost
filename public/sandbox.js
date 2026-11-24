@@ -3,16 +3,38 @@
  * Exposes a Postman-style pm API for pre-request and post-response scripts.
  */
 
+function sandboxDeepEqual(a, b) {
+  if (Object.is(a, b)) return true;
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
+    return false;
+  }
+  if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
+  if (a instanceof RegExp && b instanceof RegExp) return a.source === b.source && a.flags === b.flags;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  for (const key of keysA) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+    if (!sandboxDeepEqual(a[key], b[key])) return false;
+  }
+  return true;
+}
+
 async function runScriptSandbox(scriptText, context = {}) {
   context.globals = context.globals || {};
   context.environment = context.environment || {};
   context.collectionVariables = context.collectionVariables || {};
   context.localVariables = context.localVariables || {};
+  context.iterationData = context.iterationData || {};
   context.request = context.request || { url: '', method: 'GET', headers: {}, body: '' };
 
   const testResults = [];
   const logs = [];
   const pendingTests = [];
+  let nextRequest = undefined;
+
   const timestamp = () => new Date().toLocaleTimeString();
   const stringify = value => {
     if (typeof value === 'string') return value;
@@ -36,15 +58,16 @@ async function runScriptSandbox(scriptText, context = {}) {
 
   const makeStore = (store, fallbackStores = []) => ({
     get: key => {
-      if (key in store) return store[key];
+      if (Object.prototype.hasOwnProperty.call(store, key)) return store[key];
       for (const fallback of fallbackStores) {
-        if (key in fallback) return fallback[key];
+        if (fallback && Object.prototype.hasOwnProperty.call(fallback, key)) return fallback[key];
       }
       return undefined;
     },
     set: (key, value) => { store[key] = String(value); },
     unset: key => { delete store[key]; },
-    has: key => key in store || fallbackStores.some(fallback => key in fallback),
+    has: key => Object.prototype.hasOwnProperty.call(store, key) ||
+      fallbackStores.some(fallback => fallback && Object.prototype.hasOwnProperty.call(fallback, key)),
     clear: () => Object.keys(store).forEach(key => delete store[key]),
     toObject: () => Object.assign({}, ...fallbackStores.slice().reverse(), store)
   });
@@ -52,8 +75,9 @@ async function runScriptSandbox(scriptText, context = {}) {
   const globals = makeStore(context.globals);
   const environment = makeStore(context.environment);
   const collectionVariables = makeStore(context.collectionVariables);
-  const iterationData = makeStore(context.iterationData || {});
+  const iterationData = makeStore(context.iterationData);
   const variables = makeStore(context.localVariables, [
+    context.iterationData,
     context.environment,
     context.collectionVariables,
     context.globals
@@ -78,8 +102,11 @@ async function runScriptSandbox(scriptText, context = {}) {
       const oldKey = Object.keys(request.headers).find(header => header.toLowerCase() === String(key).toLowerCase());
       request.headers[oldKey || key] = String(value);
     },
+    upsert: header => {
+      if (header && header.key) requestHeaders.set(header.key, header.value == null ? '' : header.value);
+    },
     add: header => {
-      if (header && header.key) requestHeaders.set(header.key, header.value || '');
+      if (header && header.key) requestHeaders.set(header.key, header.value == null ? '' : header.value);
     },
     remove: key => {
       const found = Object.keys(request.headers).find(header => header.toLowerCase() === String(key).toLowerCase());
@@ -111,21 +138,35 @@ async function runScriptSandbox(scriptText, context = {}) {
     }
   });
 
+  const getTypeName = value => {
+    if (value === null) return 'null';
+    if (Array.isArray(value)) return 'array';
+    return typeof value;
+  };
+
   const expect = (actual, negate = false) => {
     const check = (condition, message) => {
-      if (negate ? condition : !condition) throw new Error(negate ? `expected ${message} not to match` : `expected ${message}`);
+      if (negate ? condition : !condition) {
+        throw new Error(negate ? `expected ${message} not to match` : `expected ${message}`);
+      }
     };
     const chain = {
       equal: expected => check(actual === expected, `${stringify(actual)} to equal ${stringify(expected)}`),
-      eql: expected => check(JSON.stringify(actual) === JSON.stringify(expected), `${stringify(actual)} to deeply equal ${stringify(expected)}`),
+      eql: expected => check(sandboxDeepEqual(actual, expected), `${stringify(actual)} to deeply equal ${stringify(expected)}`),
       include: expected => {
         const includes = typeof actual === 'string' || Array.isArray(actual)
           ? actual.includes(expected)
           : actual !== null && typeof actual === 'object' && expected in actual;
         check(includes, `${stringify(actual)} to include ${stringify(expected)}`);
       },
-      a: type => check(typeof actual === type || (type === 'array' && Array.isArray(actual)), `${stringify(actual)} to be a ${type}`),
-      an: type => check(typeof actual === type || (type === 'array' && Array.isArray(actual)), `${stringify(actual)} to be an ${type}`),
+      a: type => {
+        const normalized = String(type).toLowerCase();
+        check(getTypeName(actual) === normalized, `${stringify(actual)} to be a ${type}`);
+      },
+      an: type => {
+        const normalized = String(type).toLowerCase();
+        check(getTypeName(actual) === normalized, `${stringify(actual)} to be an ${type}`);
+      },
       ok: () => check(Boolean(actual), `${stringify(actual)} to be truthy`),
       above: value => check(actual > value, `${stringify(actual)} to be above ${value}`),
       below: value => check(actual < value, `${stringify(actual)} to be below ${value}`),
@@ -140,9 +181,17 @@ async function runScriptSandbox(scriptText, context = {}) {
       },
       property: function (key, expected) {
         const hasProperty = actual != null && key in Object(actual);
-        check(hasProperty, `${stringify(actual)} to have property "${key}"`);
         const value = actual == null ? undefined : actual[key];
-        if (arguments.length > 1) check(value === expected, `property "${key}" to equal ${stringify(expected)}`);
+        if (arguments.length > 1) {
+          if (negate) {
+            check(hasProperty && sandboxDeepEqual(value, expected), `property "${key}" to equal ${stringify(expected)}`);
+            return expect(value, false);
+          }
+          check(hasProperty, `${stringify(actual)} to have property "${key}"`);
+          check(sandboxDeepEqual(value, expected), `property "${key}" (${stringify(value)}) to equal ${stringify(expected)}`);
+          return expect(value, false);
+        }
+        check(hasProperty, `${stringify(actual)} to have property "${key}"`);
         return expect(value, negate);
       }
     };
@@ -151,14 +200,21 @@ async function runScriptSandbox(scriptText, context = {}) {
       be: { get: () => chain },
       have: { get: () => chain },
       and: { get: () => chain },
+      deep: { get: () => chain },
       not: { get: () => expect(actual, !negate) },
+      exist: { get: () => { check(actual !== null && actual !== undefined, `${stringify(actual)} to exist`); return true; } },
+      null: { get: () => { check(actual === null, `${stringify(actual)} to be null`); return true; } },
+      undefined: { get: () => { check(actual === undefined, `${stringify(actual)} to be undefined`); return true; } },
+      nan: { get: () => { check(Number.isNaN(actual), `${stringify(actual)} to be NaN`); return true; } },
       true: { get: () => { check(actual === true, `${stringify(actual)} to be true`); return true; } },
       false: { get: () => { check(actual === false, `${stringify(actual)} to be false`); return true; } },
-      empty: { get: () => {
-        const empty = actual == null || actual.length === 0 || (typeof actual === 'object' && Object.keys(actual).length === 0);
-        check(empty, `${stringify(actual)} to be empty`);
-        return true;
-      } }
+      empty: {
+        get: () => {
+          const empty = actual == null || actual.length === 0 || (typeof actual === 'object' && Object.keys(actual).length === 0);
+          check(empty, `${stringify(actual)} to be empty`);
+          return true;
+        }
+      }
     });
     return chain;
   };
@@ -170,8 +226,8 @@ async function runScriptSandbox(scriptText, context = {}) {
       throw new Error('pm.sendRequest is unavailable in this execution context.');
     }
 
-    const request = typeof options === 'string' ? { url: options } : { ...options };
-    const requestPromise = Promise.resolve().then(() => context.sendRequest(request));
+    const reqOptions = typeof options === 'string' ? { url: options } : { ...options };
+    const requestPromise = Promise.resolve().then(() => context.sendRequest(reqOptions));
     const resultPromise = requestPromise.then(result => {
       const headers = result.headers || {};
       const responseHeaders = {
@@ -211,6 +267,7 @@ async function runScriptSandbox(scriptText, context = {}) {
     pendingRequests.push(resultPromise);
     return resultPromise;
   };
+
   let pmResponse = null;
   if (response) {
     const responseHeaders = response.headers || {};
@@ -223,6 +280,42 @@ async function runScriptSandbox(scriptText, context = {}) {
       has: name => findHeader(name) !== undefined,
       toObject: () => ({ ...responseHeaders })
     };
+    const responseToBe = {
+      success: () => {
+        if (response.status < 200 || response.status >= 300) throw new Error(`expected successful (2xx) status code but got ${response.status}`);
+      },
+      clientError: () => {
+        if (response.status < 400 || response.status >= 500) throw new Error(`expected client error (4xx) status code but got ${response.status}`);
+      },
+      serverError: () => {
+        if (response.status < 500 || response.status >= 600) throw new Error(`expected server error (5xx) status code but got ${response.status}`);
+      }
+    };
+    Object.defineProperties(responseToBe, {
+      ok: {
+        get: () => {
+          if (response.status < 200 || response.status >= 300) throw new Error(`expected ok (2xx) status code but got ${response.status}`);
+          return true;
+        }
+      },
+      error: {
+        get: () => {
+          if (response.status < 400 || response.status >= 600) throw new Error(`expected error (4xx/5xx) status code but got ${response.status}`);
+          return true;
+        }
+      },
+      json: {
+        get: () => {
+          try {
+            JSON.parse(response.body || '');
+            return true;
+          } catch (error) {
+            throw new Error(`expected response body to be valid JSON: ${error.message}`);
+          }
+        }
+      }
+    });
+
     pmResponse = {
       code: response.status,
       status: response.statusText || '',
@@ -241,7 +334,14 @@ async function runScriptSandbox(scriptText, context = {}) {
       to: {
         have: {
           status: expected => {
-            if (response.status !== expected) throw new Error(`expected status code ${expected} but got ${response.status}`);
+            if (typeof expected === 'number') {
+              if (response.status !== expected) throw new Error(`expected status code ${expected} but got ${response.status}`);
+            } else {
+              const statusText = String(response.statusText || '');
+              if (statusText.toLowerCase() !== String(expected).toLowerCase()) {
+                throw new Error(`expected status "${expected}" but got "${statusText}"`);
+              }
+            }
           },
           header: (name, expectedValue) => {
             const value = responseHeaderApi.get(name);
@@ -249,22 +349,27 @@ async function runScriptSandbox(scriptText, context = {}) {
             if (expectedValue !== undefined && value !== expectedValue) {
               throw new Error(`expected header "${name}" to equal "${expectedValue}" but got "${value}"`);
             }
+          },
+          jsonBody: expected => {
+            let parsed;
+            try {
+              parsed = JSON.parse(response.body || '');
+            } catch (error) {
+              throw new Error(`expected response body to be valid JSON: ${error.message}`);
+            }
+            if (expected !== undefined && !sandboxDeepEqual(parsed, expected)) {
+              throw new Error(`expected JSON body ${stringify(parsed)} to deeply equal ${stringify(expected)}`);
+            }
           }
         },
-        be: {
-          success: () => {
-            if (response.status < 200 || response.status >= 300) throw new Error(`expected successful (2xx) status code but got ${response.status}`);
-          },
-          clientError: () => {
-            if (response.status < 400 || response.status >= 500) throw new Error(`expected client error (4xx) status code but got ${response.status}`);
-          },
-          serverError: () => {
-            if (response.status < 500 || response.status >= 600) throw new Error(`expected server error (5xx) status code but got ${response.status}`);
-          }
-        }
+        be: responseToBe
       }
     };
   }
+
+  const postman = {
+    setNextRequest: nameOrId => { nextRequest = nameOrId; }
+  };
 
   const pm = {
     globals,
@@ -276,6 +381,9 @@ async function runScriptSandbox(scriptText, context = {}) {
     response: pmResponse,
     sendRequest,
     info: context.info || {},
+    execution: {
+      setNextRequest: nameOrId => { nextRequest = nameOrId; }
+    },
     testResults,
     test: (name, assertFn) => {
       try {
@@ -298,8 +406,8 @@ async function runScriptSandbox(scriptText, context = {}) {
   try {
     if (scriptText && scriptText.trim()) {
       const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
-      const runFn = new AsyncFunction('pm', 'console', scriptText);
-      await runFn(pm, mockConsole);
+      const runFn = new AsyncFunction('pm', 'console', 'postman', scriptText);
+      await runFn(pm, mockConsole, postman);
     }
     while (pendingRequests.length > 0 || pendingTests.length > 0) {
       await Promise.all([...pendingRequests.splice(0), ...pendingTests.splice(0)]);
@@ -319,13 +427,14 @@ async function runScriptSandbox(scriptText, context = {}) {
     collectionVariables: context.collectionVariables,
     localVariables: context.localVariables,
     request,
+    nextRequest,
     testResults,
     logs
   };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runScriptSandbox };
+  module.exports = { runScriptSandbox, sandboxDeepEqual };
 } else if (typeof self !== 'undefined') {
   self.runScriptSandbox = runScriptSandbox;
 }

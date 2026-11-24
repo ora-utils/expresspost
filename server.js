@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
-const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,99 +20,144 @@ app.get('/oauth/callback', (req, res) => {
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+// Memory cache for client mock endpoints
+let localMocks = [];
+
+function normalizeMockPath(rawPath) {
+  let p = String(rawPath || '').trim();
+  const qIndex = p.indexOf('?');
+  if (qIndex !== -1) p = p.slice(0, qIndex);
+  if (!p.startsWith('/')) p = '/' + p;
+  if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+  return p;
+}
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime(), mocksCount: localMocks.length });
+});
+
 // HTTP Proxy Endpoint to bypass CORS
 app.post('/api/proxy', async (req, res) => {
-  const { url, method, headers = {}, body = null } = req.body;
+  const { url, method, headers = {}, body = null, timeout = 30000 } = req.body || {};
 
-  if (!url) {
+  if (!url || typeof url !== 'string') {
     return res.status(400).json({ error: 'URL is required' });
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(url.trim());
+  } catch (err) {
+    return res.status(400).json({ error: 'Invalid URL', message: 'Please enter a valid http:// or https:// URL.' });
+  }
+
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    return res.status(400).json({ error: 'Unsupported Protocol', message: 'Only http:// and https:// URLs are supported.' });
   }
 
   // Clean request headers to avoid conflicts
   const cleanHeaders = {};
-  Object.keys(headers).forEach(key => {
-    const lowerKey = key.toLowerCase();
-    // Do not forward standard host or length headers, let axios/Node compute them
-    if (lowerKey !== 'host' && lowerKey !== 'content-length' && headers[key] !== undefined && headers[key] !== '') {
-      cleanHeaders[key] = headers[key];
-    }
-  });
+  if (headers && typeof headers === 'object') {
+    Object.keys(headers).forEach(key => {
+      const lowerKey = key.toLowerCase();
+      // Do not forward standard host, connection, or length headers; let axios/Node compute them
+      if (lowerKey !== 'host' && lowerKey !== 'content-length' && lowerKey !== 'connection' && headers[key] !== undefined && headers[key] !== '') {
+        cleanHeaders[key] = String(headers[key]);
+      }
+    });
+  }
 
+  // Ensure realistic client User-Agent, Accept, and Encoding like Postman Desktop
+  const hasUserAgent = Object.keys(cleanHeaders).some(k => k.toLowerCase() === 'user-agent');
+  if (!hasUserAgent) {
+    cleanHeaders['user-agent'] = 'PostmanRuntime/7.39.0 (ExpressPost/1.0.0; Windows NT 10.0; Win64; x64)';
+  }
+  const hasAccept = Object.keys(cleanHeaders).some(k => k.toLowerCase() === 'accept');
+  if (!hasAccept) {
+    cleanHeaders['accept'] = '*/*';
+  }
+  const hasAcceptEncoding = Object.keys(cleanHeaders).some(k => k.toLowerCase() === 'accept-encoding');
+  if (!hasAcceptEncoding) {
+    cleanHeaders['accept-encoding'] = 'gzip, deflate, br';
+  }
+
+  const normalizedMethod = String(method || 'GET').toUpperCase();
+  const safeTimeout = Math.min(Math.max(parseInt(timeout, 10) || 30000, 1000), 120000);
   const start = Date.now();
 
   try {
-    // Determine request payload config
     let requestData = body;
-    
-    // For form-data payload, if it was sent as structured key-value array
+
+    // For form-data payload sent as structured key-value array
     const contentTypeHeader = Object.keys(cleanHeaders).find(key => key.toLowerCase() === 'content-type');
     if (body && typeof body === 'object' && contentTypeHeader &&
         String(cleanHeaders[contentTypeHeader]).toLowerCase().includes('multipart/form-data')) {
-      // Create boundary and build multipart form body
-      const boundary = '----WebKitFormBoundaryPostmanClone' + Math.random().toString(36).substring(2);
+      const boundary = '----WebKitFormBoundaryExpressPost' + Math.random().toString(36).substring(2);
       cleanHeaders[contentTypeHeader] = `multipart/form-data; boundary=${boundary}`;
-      
-      let multipartBody = '';
+
       if (Array.isArray(body)) {
+        const chunks = [];
+        const safeQuote = v => String(v || '').replace(/[\r\n"]/g, '_');
+
         for (const item of body) {
-          if (!item.key) continue;
-          multipartBody += `--${boundary}\r\n`;
-          
+          if (!item || !item.key) continue;
+          const fieldName = safeQuote(item.key);
+
           if (item.type === 'file' && item.fileData) {
-            // fileData is expected to be a base64 encoded string: "data:mime/type;base64,..."
-            const matches = item.fileData.match(/^data:(.+);base64,(.+)$/);
+            const matches = String(item.fileData).match(/^data:([^;,]*)(?:;[^,]*)?;base64,(.+)$/);
             if (matches) {
-              const filename = item.fileName || 'file';
+              const mimeType = matches[1] || 'application/octet-stream';
+              const filename = safeQuote(item.fileName || 'file');
               const fileBuffer = Buffer.from(matches[2], 'base64');
-              multipartBody += `Content-Disposition: form-data; name="${item.key}"; filename="${filename}"\r\n`;
-              multipartBody += `Content-Type: ${matches[1]}\r\n\r\n`;
-              multipartBody += fileBuffer.toString('binary');
-              multipartBody += '\r\n';
+              chunks.push(Buffer.from(
+                `--${boundary}\r\nContent-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\nContent-Type: ${mimeType}\r\n\r\n`,
+                'utf8'
+              ));
+              chunks.push(fileBuffer);
+              chunks.push(Buffer.from('\r\n', 'utf8'));
             }
           } else {
-            multipartBody += `Content-Disposition: form-data; name="${item.key}"\r\n\r\n`;
-            multipartBody += `${item.value || ''}\r\n`;
+            chunks.push(Buffer.from(
+              `--${boundary}\r\nContent-Disposition: form-data; name="${fieldName}"\r\n\r\n${item.value == null ? '' : String(item.value)}\r\n`,
+              'utf8'
+            ));
           }
         }
-        multipartBody += `--${boundary}--\r\n`;
-        // Convert to buffer with binary encoding
-        requestData = Buffer.from(multipartBody, 'binary');
+        chunks.push(Buffer.from(`--${boundary}--\r\n`, 'utf8'));
+        requestData = Buffer.concat(chunks);
       }
     }
 
     const axiosConfig = {
-      method: method || 'GET',
-      url: url,
+      method: normalizedMethod,
+      url: parsedUrl.toString(),
       headers: cleanHeaders,
-      data: requestData,
-      // Do not follow redirects automatically so client can see them (optional)
-      // but usually Postman follows redirects. We can follow them.
       maxRedirects: 5,
-      // Don't reject promise for any status code
       validateStatus: () => true,
-      // Receive raw response text/buffer to avoid parsing issues
       responseType: 'arraybuffer',
-      // Set reasonable timeout (30 seconds)
-      timeout: 30000
+      timeout: safeTimeout
     };
+
+    if (requestData !== null && requestData !== undefined &&
+        !((normalizedMethod === 'GET' || normalizedMethod === 'HEAD') && requestData === '')) {
+      axiosConfig.data = requestData;
+    }
 
     const response = await axios(axiosConfig);
     const duration = Date.now() - start;
 
-    // Convert arraybuffer back to string/JSON
     const responseHeaders = {};
-    Object.keys(response.headers).forEach(key => {
-      // Convert headers array or string correctly
-      responseHeaders[key] = response.headers[key];
+    Object.keys(response.headers || {}).forEach(key => {
+      const val = response.headers[key];
+      responseHeaders[key] = Array.isArray(val) ? val.join(', ') : val;
     });
 
     const bodyBuffer = response.data;
     const bodySize = bodyBuffer ? bodyBuffer.length : 0;
-    
-    // Convert body to string
+
     let responseText = '';
     if (bodyBuffer) {
-      // Decode with UTF-8 by default
       responseText = bodyBuffer.toString('utf8');
     }
 
@@ -125,28 +169,33 @@ app.post('/api/proxy', async (req, res) => {
       time: duration,
       size: bodySize
     });
-
   } catch (error) {
     const duration = Date.now() - start;
     res.status(502).json({
       error: 'Proxy Error',
+      code: error.code || 'PROXY_FAILED',
       message: error.message,
-      time: duration,
-      details: error.stack
+      time: duration
     });
   }
 });
 
-
-
-// Memory cache for client mock endpoints
-let localMocks = [];
+// Get currently synced mocks
+app.get('/api/mocks', (req, res) => {
+  res.json({ mocks: localMocks, count: localMocks.length });
+});
 
 // Sync mocks from the client
 app.post('/api/mocks/sync', (req, res) => {
-  const { mocks } = req.body;
+  const { mocks } = req.body || {};
   if (Array.isArray(mocks)) {
-    localMocks = mocks;
+    localMocks = mocks.map(m => ({
+      ...m,
+      path: normalizeMockPath(m.path),
+      method: String(m.method || 'GET').toUpperCase(),
+      status: Math.min(Math.max(parseInt(m.status, 10) || 200, 100), 599),
+      delay: Math.min(Math.max(parseInt(m.delay, 10) || 0, 0), 10000)
+    }));
     console.log(`[ExpressPost Mock Engine] Synced ${localMocks.length} mock endpoints.`);
     return res.json({ success: true, count: localMocks.length });
   }
@@ -154,48 +203,52 @@ app.post('/api/mocks/sync', (req, res) => {
 });
 
 // Wildcard Mock Endpoint
-app.all('/mock/*', (req, res) => {
-  // Extract path without '/mock' prefix
-  let mockPath = req.path.replace(/^\/mock/, '');
-  if (!mockPath.startsWith('/')) {
-    mockPath = '/' + mockPath;
-  }
-  
+app.all(['/mock', '/mock/*'], async (req, res) => {
+  const mockPath = normalizeMockPath(req.path.replace(/^\/mock/, '') || '/');
   const method = req.method.toUpperCase();
   console.log(`[ExpressPost Mock Engine] Request: ${method} ${mockPath}`);
 
-  // Find exact matching mock
-  const match = localMocks.find(m => {
-    let mPath = m.path || '';
-    if (!mPath.startsWith('/')) {
-      mPath = '/' + mPath;
-    }
-    return mPath.toLowerCase() === mockPath.toLowerCase() && m.method.toUpperCase() === method;
-  });
+  const match = localMocks.find(m =>
+    m.enabled !== false &&
+    normalizeMockPath(m.path).toLowerCase() === mockPath.toLowerCase() &&
+    String(m.method || 'GET').toUpperCase() === method
+  );
 
   if (match) {
-    const status = parseInt(match.status) || 200;
+    if (match.delay > 0) {
+      await new Promise(resolve => setTimeout(resolve, match.delay));
+    }
+
+    const status = Math.min(Math.max(parseInt(match.status, 10) || 200, 100), 599);
     const contentType = match.contentType || 'application/json';
-    
-    // Set headers
+
     res.setHeader('Content-Type', contentType);
     res.setHeader('X-Powered-By', 'ExpressPost Mock Simulator');
 
     if (Array.isArray(match.headers)) {
       match.headers.forEach(h => {
-        if (h.key && h.value) {
-          res.setHeader(h.key, h.value);
+        if (h && h.enabled !== false && h.key && h.value !== undefined) {
+          const lower = String(h.key).trim().toLowerCase();
+          if (lower && lower !== 'content-length' && lower !== 'transfer-encoding') {
+            try {
+              res.setHeader(String(h.key).trim(), String(h.value));
+            } catch (e) {
+              // Ignore invalid header names/values
+            }
+          }
         }
       });
     }
 
-    let responseBody = match.body || '';
-    if (contentType === 'application/json') {
+    if (status === 204 || status === 304) {
+      return res.status(status).end();
+    }
+
+    const responseBody = match.body == null ? '' : String(match.body);
+    if (contentType.toLowerCase().includes('json')) {
       try {
-        // Send as parsed JSON if valid
         return res.status(status).json(JSON.parse(responseBody));
       } catch (e) {
-        // Fallback to sending string if not parseable
         return res.status(status).send(responseBody);
       }
     }
@@ -205,22 +258,25 @@ app.all('/mock/*', (req, res) => {
   // Not found
   res.status(404).json({
     error: 'Mock Endpoint Not Found',
-    message: `No mock configured for ${method} /mock${mockPath}`,
+    message: `No mock configured for ${method} /mock${mockPath === '/' ? '' : mockPath}`,
     hint: 'Configure mock endpoints inside ExpressPost and sync them to make them active.',
-    activeMocks: localMocks.map(m => `${m.method} /mock${m.path.startsWith('/') ? m.path : '/' + m.path}`)
+    activeMocks: localMocks
+      .filter(m => m.enabled !== false)
+      .map(m => `${m.method} /mock${normalizeMockPath(m.path)}`)
   });
 });
 
-function startServer(port) {
+function startServer(port, host) {
   return new Promise((resolve, reject) => {
-    const server = app.listen(port, () => {
+    const onListen = () => {
       console.log(`==================================================`);
-      console.log(`🚀 Postman Clone server running on http://localhost:${port}`);
+      console.log(`🚀 ExpressPost server running on http://${host || 'localhost'}:${port}`);
       console.log(`📂 Serving static app files from ./public`);
-      console.log(`🔗 CORS Proxy API active at http://localhost:${port}/api/proxy`);
+      console.log(`🔗 CORS Proxy API active at http://${host || 'localhost'}:${port}/api/proxy`);
       console.log(`==================================================`);
       resolve(server);
-    });
+    };
+    const server = host ? app.listen(port, host, onListen) : app.listen(port, onListen);
     server.on('error', (err) => {
       reject(err);
     });

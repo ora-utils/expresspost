@@ -15,7 +15,7 @@ ExpressPost is a premium, multithreaded API client and Collection Runner built w
 - **Appearance settings**: Choose Dark, Midnight, or Light themes, set an accent color, and switch between comfortable and compact layouts. Preferences are saved locally in the browser.
 - **Electron & Browser Support**: Run it as a lightweight web app in your browser or build it as a standalone Desktop application using Electron.
 
-**Direct Mode and CORS:** Direct Mode sends requests from the browser, so the API server must allow the app's origin and any preflight method/headers. Enterprise APIs such as Oracle Fusion may restrict these origins; use Proxy Mode unless the API's CORS configuration explicitly allows this app.
+**CORS-Free Execution:** Like Postman Desktop, ExpressPost routes HTTP requests automatically through its built-in local Node.js runtime (`/api/proxy`) rather than browser `fetch()`, bypassing browser CORS restrictions out of the box without requiring any proxy/direct mode switcher.
 
 ---
 
@@ -72,7 +72,7 @@ Requests, collections, and environments are saved locally in the browser's (or E
 - API requests and OAuth token requests are sent to the configured remote servers. Exported collections omit built-in auth credentials and sensitive headers; re-enter credentials after importing. Secrets embedded in request bodies, scripts, or ordinary variables cannot be detected automatically.
 
 ### OAuth 2.0 setup
-Choose **OAuth 2.0**, select the grant, and enter the issuer's token URL and client details. Authorization Code flows also need an authorization URL and a redirect URI registered with the identity provider. The default redirect is `<app-origin>/oauth/callback`; use **Get New Access Token** to complete sign-in. Token requests use Proxy Mode. The Password grant is legacy and should only be used when the identity provider requires it.
+Choose **OAuth 2.0**, select the grant, and enter the issuer's token URL and client details. Authorization Code flows also need an authorization URL and a redirect URI registered with the identity provider. The default redirect is `<app-origin>/oauth/callback`; use **Get New Access Token** to complete sign-in. Token requests are dispatched through the local Node.js runtime. The Password grant is legacy and should only be used when the identity provider requires it.
 
 ### Request Scripts
 Pre-request scripts can use `pm.request.url`, `pm.request.method`, `pm.request.headers` (`get`, `set`, `add`, `remove`, and `toObject`), `pm.request.body.update()`, and `pm.sendRequest()`. `pm.sendRequest()` accepts a URL or request object and may be awaited or called with a callback. Variables are available through `pm.variables`, `pm.environment`, `pm.collectionVariables`, `pm.globals`, and `pm.iterationData`.

@@ -79,6 +79,9 @@
                         </button>
                         <input type="file" id="file-import-input" style="display: none;" accept=".json">
                     </div>
+                    <div class="sidebar-search-wrapper">
+                        <input type="search" id="collections-search" class="form-control sidebar-search-input" placeholder="Filter collections..." aria-label="Filter collections" autocomplete="off">
+                    </div>
                     <div id="collections-list" class="list-container">
                         <!-- Dynamic Collections Load -->
                         <div class="empty-state">
@@ -112,6 +115,9 @@
                             <i class="fa-solid fa-trash-can"></i> Clear History
                         </button>
                     </div>
+                    <div class="sidebar-search-wrapper">
+                        <input type="search" id="history-search" class="form-control sidebar-search-input" placeholder="Filter history..." aria-label="Filter history" autocomplete="off">
+                    </div>
                     <div id="history-list" class="list-container">
                         <!-- Dynamic History Load -->
                     </div>
@@ -125,9 +131,10 @@
                             <i class="fa-solid fa-plus"></i> New Mock
                         </button>
                         <button id="btn-sync-mocks" class="btn btn-sm btn-secondary" title="Sync Mock configuration to Server">
-                            <i class="fa-solid fa-rotate"></i> Sync Server
+                            <i class="fa-solid fa-rotate"></i> Sync
                         </button>
                     </div>
+                    <p class="help-text" id="mock-base-url-hint" style="margin: 0;">Base: <code>/mock/&lt;path&gt;</code> · Click a mock to test</p>
                     <div id="mocks-list" class="list-container">
                         <!-- Dynamic Mocks Load -->
                         <div class="empty-state">
@@ -179,36 +186,45 @@
                             <option value="OPTIONS">OPTIONS</option>
                             <option value="HEAD">HEAD</option>
                         </select>
-                        <input type="text" id="request-url" placeholder="https://api.example.com/endpoint" class="url-input" autocomplete="off">
-                        <div class="engine-toggle" title="Direct sends from your browser and requires the API server to allow this app origin via CORS. Proxy sends through the local Node.js server and avoids browser CORS restrictions.">
-                            <select id="request-engine" class="engine-select">
-                                <option value="proxy">Proxy Mode</option>
-                                <option value="direct">Direct Mode</option>
-                            </select>
-                        </div>
-                        <button id="btn-send-request" class="btn btn-primary send-btn">
+                        <input type="text" id="request-url" placeholder="https://api.example.com/endpoint (supports {{variable}})" class="url-input" autocomplete="off">
+                        <button id="btn-send-request" class="btn btn-primary send-btn" title="Send Request (Ctrl+Enter)">
                             <span>Send</span> <i class="fa-solid fa-paper-plane"></i>
                         </button>
-                        <button id="btn-save-request" class="btn btn-secondary save-btn" title="Save Request">
-                            <i class="fa-solid fa-floppy-disk"></i>
+                        <button id="btn-save-request" class="btn btn-secondary save-btn" title="Save Request to Collection (Ctrl+S)">
+                            <i class="fa-solid fa-floppy-disk"></i> <span>Save</span>
                         </button>
-                        <button id="btn-import-curl" class="btn btn-secondary curl-btn" title="Import from cURL">
+                        <button id="btn-import-curl" class="btn btn-secondary curl-btn" title="Paste a cURL command to import">
                             <i class="fa-solid fa-file-import"></i> <span>Import cURL</span>
                         </button>
-                        <button id="btn-export-curl" class="btn btn-secondary curl-btn" title="Generate Code Snippet">
-                            <i class="fa-solid fa-code"></i> <span>Generate Code</span>
+                        <button id="btn-export-curl" class="btn btn-secondary curl-btn" title="Generate cURL, Python, or Node.js code">
+                            <i class="fa-solid fa-code"></i> <span>Code</span>
                         </button>
                     </div>
+
+                    <!-- Clickable Variable Chips for active URL (shown only when URL contains {{vars}}) -->
+                    <div id="url-var-pills" class="url-var-pills hidden" aria-label="URL variables"></div>
 
                     <!-- Request Configuration Tabs -->
                     <div class="config-tabs-container">
                         <div class="config-tabs">
-                            <button class="config-tab active" data-config="params" title="Query parameters" aria-label="Query parameters"><i class="fa-solid fa-list-ul"></i></button>
-                            <button class="config-tab" data-config="auth" title="Authorization" aria-label="Authorization"><i class="fa-solid fa-lock"></i></button>
-                            <button class="config-tab" data-config="headers" title="Headers" aria-label="Headers"><i class="fa-solid fa-list"></i><span id="header-badge-count">0</span></button>
-                            <button class="config-tab" data-config="body" title="Request body" aria-label="Request body"><i class="fa-solid fa-file-lines"></i></button>
-                            <button class="config-tab" data-config="pre-request" title="Pre-request script" aria-label="Pre-request script"><i class="fa-solid fa-code"></i></button>
-                            <button class="config-tab" data-config="tests" title="Post-response tests" aria-label="Post-response tests"><i class="fa-solid fa-vial"></i></button>
+                            <button class="config-tab active" data-config="params" title="Query parameters (?key=value)" aria-label="Query parameters">
+                                <i class="fa-solid fa-sliders"></i><span>Params</span><span class="tab-badge hidden" id="params-badge-count">0</span>
+                            </button>
+                            <button class="config-tab" data-config="auth" title="Authorization (Bearer, Basic, API Key, OAuth 2.0)" aria-label="Authorization">
+                                <i class="fa-solid fa-lock"></i><span>Auth</span><span class="tab-dot hidden" id="auth-indicator-dot"></span>
+                            </button>
+                            <button class="config-tab" data-config="headers" title="HTTP request headers" aria-label="Headers">
+                                <i class="fa-solid fa-list"></i><span>Headers</span><span class="tab-badge" id="header-badge-count">0</span>
+                            </button>
+                            <button class="config-tab" data-config="body" title="Request payload (JSON, Form-Data, URL-Encoded)" aria-label="Request body">
+                                <i class="fa-solid fa-file-lines"></i><span>Body</span><span class="tab-dot hidden" id="body-indicator-dot"></span>
+                            </button>
+                            <button class="config-tab" data-config="pre-request" title="JavaScript executed before sending" aria-label="Pre-request script">
+                                <i class="fa-solid fa-terminal"></i><span>Pre-request</span><span class="tab-dot hidden" id="prescript-indicator-dot"></span>
+                            </button>
+                            <button class="config-tab" data-config="tests" title="JavaScript assertions executed after response" aria-label="Post-response tests">
+                                <i class="fa-solid fa-vial"></i><span>Tests</span><span class="tab-dot hidden" id="tests-indicator-dot"></span>
+                            </button>
                         </div>
 
                         <div class="config-panes">
@@ -385,12 +401,20 @@
                                             <input type="radio" name="body-type" value="raw"> raw
                                         </label>
                                     </div>
-                                    <select id="body-raw-type" class="body-raw-type-select hidden">
-                                        <option value="application/json">JSON</option>
-                                        <option value="text/plain">Text</option>
-                                        <option value="application/xml">XML</option>
-                                        <option value="text/html">HTML</option>
-                                    </select>
+                                    <div class="body-raw-actions">
+                                        <select id="body-raw-type" class="body-raw-type-select hidden" aria-label="Raw body format">
+                                            <option value="application/json">JSON</option>
+                                            <option value="text/plain">Text</option>
+                                            <option value="application/xml">XML</option>
+                                            <option value="text/html">HTML</option>
+                                        </select>
+                                        <button type="button" id="btn-format-body-json" class="btn btn-sm btn-secondary hidden" title="Pretty-format body (Ctrl+B / Alt+Shift+F)">
+                                            <i class="fa-solid fa-wand-magic-sparkles"></i> Beautify
+                                        </button>
+                                        <button type="button" id="btn-wrap-body-raw" class="btn btn-sm btn-ghost hidden" title="Toggle line wrapping" aria-label="Toggle line wrapping">
+                                            <i class="fa-solid fa-arrow-turn-down"></i> Wrap
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div class="body-content-area">
@@ -451,8 +475,8 @@
                                 </div>
                                 <div class="script-layout">
                                     <div id="pre-request-editor" class="ace-editor-container script-editor"></div>
-                                    <details class="script-snippets">
-                                        <summary>Pre-request helpers</summary>
+                                    <details class="script-snippets" open>
+                                        <summary>Snippets (click to insert)</summary>
                                         <button class="snippet-btn" data-snippet-target="pre-request" data-snippet="set-env">Set environment variable</button>
                                         <button class="snippet-btn" data-snippet-target="pre-request" data-snippet="set-global">Set global variable</button>
                                         <button class="snippet-btn" data-snippet-target="pre-request" data-snippet="timestamp">Create timestamp</button>
@@ -470,8 +494,8 @@
                                 </div>
                                 <div class="script-layout">
                                     <div id="tests-editor" class="ace-editor-container script-editor"></div>
-                                    <details class="script-snippets">
-                                        <summary>Post-response helpers</summary>
+                                    <details class="script-snippets" open>
+                                        <summary>Snippets (click to insert)</summary>
                                         <button class="snippet-btn" data-snippet-target="tests" data-snippet="status-200">Assert status is 200</button>
                                         <button class="snippet-btn" data-snippet-target="tests" data-snippet="json-val">Assert JSON property</button>
                                         <button class="snippet-btn" data-snippet-target="tests" data-snippet="contains-string">Assert body contains text</button>
@@ -494,7 +518,7 @@
                     <div class="response-header">
                         <div class="response-title">Response</div>
                         <div class="response-meta hidden" id="response-metadata">
-                            <span class="meta-item badge" id="resp-status">200 OK</span>
+                            <span class="meta-item badge" id="resp-status">—</span>
                             <span class="meta-item"><i class="fa-regular fa-clock"></i> <span id="resp-time">0 ms</span></span>
                             <span class="meta-item"><i class="fa-solid fa-download"></i> <span id="resp-size">0 B</span></span>
                         </div>
@@ -502,21 +526,48 @@
 
                     <div class="response-empty" id="response-empty-state">
                         <i class="fa-regular fa-paper-plane animate-float"></i>
-                        <p>Send a request to see the response</p>
+                        <p>Enter a URL above and click <strong>Send</strong> to inspect the response</p>
+                        <div class="empty-shortcuts-hint">
+                            <span><kbd>Ctrl+Enter</kbd> Send</span>
+                            <span><kbd>Ctrl+S</kbd> Save</span>
+                            <span><code>{{var}}</code> Environment variables</span>
+                        </div>
                     </div>
 
                     <div class="response-content hidden" id="response-content-area">
                         <div class="response-tabs-bar">
                             <div class="response-tabs">
-                                <button class="response-tab active" data-resp-tab="body" title="Response body" aria-label="Response body"><i class="fa-solid fa-file-lines"></i></button>
-                                <button class="response-tab" data-resp-tab="headers" title="Response headers" aria-label="Response headers"><i class="fa-solid fa-list"></i></button>
-                                <button class="response-tab" data-resp-tab="results" title="Test results" aria-label="Test results"><i class="fa-solid fa-vial"></i><span id="test-pass-badge">0/0</span></button>
+                                <button class="response-tab active" data-resp-tab="body" title="Response body" aria-label="Response body">
+                                    <i class="fa-solid fa-file-lines"></i><span>Body</span>
+                                </button>
+                                <button class="response-tab" data-resp-tab="headers" title="Response headers" aria-label="Response headers">
+                                    <i class="fa-solid fa-list"></i><span>Headers</span><span class="tab-badge" id="resp-headers-badge-count">0</span>
+                                </button>
+                                <button class="response-tab" data-resp-tab="results" title="Test results" aria-label="Test results">
+                                    <i class="fa-solid fa-vial"></i><span>Tests</span><span class="tab-badge" id="test-pass-badge">0/0</span>
+                                </button>
                             </div>
                             <div class="response-body-format-controls hidden" id="resp-body-controls">
-                                <button class="icon-btn" id="btn-copy-response" title="Copy Response" aria-label="Copy Response" style="margin-right: 8px;"><i class="fa-solid fa-copy"></i></button>
-                                <button class="format-btn active" data-format="pretty">Pretty</button>
-                                <button class="format-btn" data-format="raw">Raw</button>
-                                <button class="format-btn" data-format="preview">Preview</button>
+                                <button class="icon-btn" id="btn-copy-response" title="Copy Response Body" aria-label="Copy Response Body"><i class="fa-solid fa-copy"></i></button>
+                                <button class="icon-btn" id="btn-download-response" title="Download Response" aria-label="Download Response" style="margin-right: 6px;"><i class="fa-solid fa-download"></i></button>
+                                <div class="format-btn-group">
+                                    <button class="format-btn active" data-format="pretty">Pretty</button>
+                                    <button class="format-btn" data-format="raw">Raw</button>
+                                    <button class="format-btn" data-format="preview">Preview</button>
+                                </div>
+                                <select id="resp-pretty-type" class="body-raw-type-select" title="Response Language" aria-label="Response Language">
+                                    <option value="auto">Auto</option>
+                                    <option value="json">JSON</option>
+                                    <option value="xml">XML</option>
+                                    <option value="html">HTML</option>
+                                    <option value="text">Text</option>
+                                </select>
+                                <button type="button" id="btn-format-response" class="btn btn-sm btn-secondary" title="Re-format response body (Beautify)">
+                                    <i class="fa-solid fa-wand-magic-sparkles"></i> Beautify
+                                </button>
+                                <button type="button" id="btn-wrap-response" class="btn btn-sm btn-ghost" title="Toggle line wrap" aria-label="Toggle line wrap">
+                                    <i class="fa-solid fa-arrow-turn-down"></i> Wrap
+                                </button>
                             </div>
                         </div>
 
@@ -530,7 +581,7 @@
                                     <textarea id="response-raw-text" readonly class="code-font"></textarea>
                                 </div>
                                 <div id="resp-preview-pane" class="resp-format-pane">
-                                    <iframe id="response-preview-frame"></iframe>
+                                    <iframe id="response-preview-frame" sandbox="allow-scripts allow-forms allow-modals"></iframe>
                                 </div>
                             </div>
 
@@ -630,6 +681,7 @@
                         <input type="text" id="env-name-input" class="form-control" placeholder="e.g. Production">
                     </div>
                     <h3>Variables</h3>
+                    <p class="help-text" style="margin: -4px 0 8px;">Reference variables anywhere with <code>{{key}}</code>. Current Value is used during execution.</p>
                     <table class="key-value-table" id="env-variables-table">
                         <thead>
                             <tr>
@@ -733,7 +785,10 @@
                     </div>
 
                     <div id="runner-request-list" class="runner-request-list card runner-field-full hidden">
-                        <h4>Requests to Run</h4>
+                        <div class="runner-checklist-header">
+                            <h4>Requests to Run</h4>
+                            <button type="button" id="btn-runner-toggle-all" class="btn btn-sm btn-secondary">Deselect All</button>
+                        </div>
                         <div id="runner-request-checklist" class="checklist-container">
                             <!-- Dynamic checkboxes -->
                         </div>
@@ -756,10 +811,13 @@
                                 (<span id="runner-data-rows">0</span> iterations loaded)
                             </span>
                         </summary>
-                        <div class="form-group mb-0">
+                        <div class="form-group mb-0" style="display: flex; gap: 8px; align-items: center;">
                             <label for="runner-data-file" class="btn btn-secondary w-100 runner-data-file-picker">
                                 <i class="fa-solid fa-file-import"></i> Select CSV or JSON File
                             </label>
+                            <button type="button" id="btn-clear-runner-data" class="btn btn-sm btn-danger hidden" title="Clear data file" aria-label="Clear data file">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
                             <input type="file" id="runner-data-file" accept=".csv,.json" class="hidden">
                         </div>
                     </details>
@@ -772,14 +830,6 @@
                     <div class="form-group runner-field-half">
                         <label for="runner-delay">Delay (ms)</label>
                         <input type="number" id="runner-delay" class="form-control" value="0" min="0">
-                    </div>
-                    <div class="form-group runner-field-full">
-                        <label for="runner-engine">Request Mode</label>
-                        <select id="runner-engine" class="form-control">
-                            <option value="proxy">Proxy Mode</option>
-                            <option value="direct">Direct Mode</option>
-                        </select>
-                        <p class="help-text">Direct Mode is subject to browser CORS. Proxy Mode sends requests through this app's local server.</p>
                     </div>
                     </div>
 
@@ -909,10 +959,222 @@
         </div>
     </div>
 
+    <!-- Import cURL Modal -->
+    <div class="modal-overlay hidden" id="modal-import-curl">
+        <div class="modal-content" style="width: 680px; max-width: 92vw;">
+            <div class="modal-header">
+                <h2>Import from cURL</h2>
+                <button class="modal-close-btn" id="btn-close-curl-modal" aria-label="Close Import cURL Modal">&times;</button>
+            </div>
+            <div class="modal-body curl-import-modal-body" style="display: flex; flex-direction: column; gap: 10px;">
+                <label for="curl-import-input">Paste cURL command</label>
+                <textarea id="curl-import-input" class="form-control code-font" placeholder="curl -X POST 'https://api.example.com/users' -H 'Content-Type: application/json' -d '{&quot;name&quot;:&quot;Ada&quot;}'"></textarea>
+                <p id="curl-import-error" class="help-text hidden" style="color: var(--danger); margin: 0;"></p>
+            </div>
+            <div class="modal-footer" style="justify-content: flex-end; gap: 8px;">
+                <button class="btn btn-secondary" id="btn-cancel-curl-import">Cancel</button>
+                <button class="btn btn-secondary" id="btn-confirm-curl-current">Import to Current Tab</button>
+                <button class="btn btn-primary" id="btn-confirm-curl-new">Import as New Tab</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mock Endpoint Editor Modal -->
+    <div class="modal-overlay hidden" id="modal-mock">
+        <div class="modal-content" style="width: 720px; max-width: 94vw; max-height: 90vh;">
+            <div class="modal-header">
+                <h2 id="mock-modal-title">New Mock Endpoint</h2>
+                <button class="modal-close-btn" id="btn-close-mock-modal" aria-label="Close Mock Modal">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; overflow-y: auto;">
+                <div class="mock-form-row">
+                    <div class="form-group">
+                        <label for="mock-method">Method</label>
+                        <select id="mock-method" class="form-control">
+                            <option value="GET">GET</option>
+                            <option value="POST">POST</option>
+                            <option value="PUT">PUT</option>
+                            <option value="DELETE">DELETE</option>
+                            <option value="PATCH">PATCH</option>
+                            <option value="OPTIONS">OPTIONS</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="mock-path">Endpoint Path (served under /mock)</label>
+                        <input type="text" id="mock-path" class="form-control code-font" placeholder="/users/profile">
+                    </div>
+                    <div class="form-group">
+                        <label for="mock-status">Status Code</label>
+                        <input type="number" id="mock-status" class="form-control" value="200" min="100" max="599">
+                    </div>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 140px auto; gap: 12px; align-items: end;">
+                    <div class="form-group">
+                        <label for="mock-content-type">Content-Type</label>
+                        <select id="mock-content-type" class="form-control">
+                            <option value="application/json">application/json</option>
+                            <option value="text/plain">text/plain</option>
+                            <option value="application/xml">application/xml</option>
+                            <option value="text/html">text/html</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="mock-delay">Delay (ms)</label>
+                        <input type="number" id="mock-delay" class="form-control" value="0" min="0" max="10000">
+                    </div>
+                    <div class="form-group" style="padding-bottom: 8px;">
+                        <label class="radio-label" style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                            <input type="checkbox" id="mock-enabled" checked> Enabled
+                        </label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <label>Custom Response Headers</label>
+                        <button type="button" class="btn btn-sm btn-secondary" id="btn-add-mock-header"><i class="fa-solid fa-plus"></i> Add Header</button>
+                    </div>
+                    <table class="key-value-table">
+                        <thead>
+                            <tr>
+                                <th width="30px"></th>
+                                <th>Key</th>
+                                <th>Value</th>
+                                <th width="40px"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="mock-headers-body"></tbody>
+                    </table>
+                </div>
+                <div class="form-group">
+                    <label for="mock-body">Response Body</label>
+                    <textarea id="mock-body" class="form-control code-font" rows="7" placeholder='{"message": "Hello from ExpressPost Mock!"}'></textarea>
+                </div>
+            </div>
+            <div class="modal-footer" style="justify-content: flex-end; gap: 8px;">
+                <button class="btn btn-secondary" id="btn-cancel-mock-modal">Cancel</button>
+                <button class="btn btn-primary" id="btn-save-mock">Save &amp; Sync Mock</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Collection Settings & Variables Modal -->
+    <div class="modal-overlay hidden" id="modal-collection-vars">
+        <div class="modal-content" style="width: 640px; max-width: 92vw; max-height: 88vh;">
+            <div class="modal-header">
+                <h2 id="coll-vars-modal-title">Collection Settings</h2>
+                <button class="modal-close-btn" id="btn-close-coll-vars" aria-label="Close Collection Settings">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; overflow-y: auto;">
+                <div class="form-group">
+                    <label for="coll-settings-name">Collection Name</label>
+                    <input type="text" id="coll-settings-name" class="form-control" placeholder="Collection Name">
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin: 0; font-size: 14px;">Collection Variables</h3>
+                    <button type="button" class="btn btn-sm btn-secondary" id="btn-add-coll-var"><i class="fa-solid fa-plus"></i> Add Variable</button>
+                </div>
+                <table class="key-value-table">
+                    <thead>
+                        <tr>
+                            <th>Key</th>
+                            <th>Value</th>
+                            <th width="40px"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="coll-vars-body"></tbody>
+                </table>
+            </div>
+            <div class="modal-footer" style="justify-content: space-between; gap: 8px;">
+                <button type="button" class="btn btn-danger" id="btn-delete-coll-modal"><i class="fa-solid fa-trash-can"></i> Delete Collection</button>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-secondary" id="btn-cancel-coll-vars">Cancel</button>
+                    <button class="btn btn-primary" id="btn-save-coll-vars">Save Collection</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- In-App Dialog Modal (Replaces native alert/confirm/prompt for full Electron compatibility) -->
+    <div class="modal-overlay hidden" id="modal-app-dialog" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
+        <div class="modal-content" style="width: 440px; max-width: 92vw;">
+            <div class="modal-header">
+                <h2 id="app-dialog-title">ExpressPost</h2>
+                <button class="modal-close-btn" id="btn-close-app-dialog" aria-label="Close Dialog">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 10px;">
+                <p id="app-dialog-message" style="margin: 0;"></p>
+                <input type="text" id="app-dialog-input" class="form-control hidden" autocomplete="off">
+            </div>
+            <div class="modal-footer" style="justify-content: flex-end; gap: 8px;">
+                <button class="btn btn-secondary hidden" id="btn-app-dialog-cancel">Cancel</button>
+                <button class="btn btn-primary" id="btn-app-dialog-ok">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Postman-style Inline Variable Inspector / Quick-Edit Popover -->
+    <div id="variable-popover" class="variable-popover hidden" role="dialog" aria-label="Variable Inspector">
+        <div class="var-popover-arrow" id="var-popover-arrow"></div>
+        <div class="var-popover-header">
+            <div class="var-popover-title-wrap">
+                <span class="var-scope-badge" id="var-popover-badge">U</span>
+                <span class="var-popover-name code-font" id="var-popover-name">variable</span>
+                <span class="var-popover-scope-label" id="var-popover-meta">Unresolved</span>
+            </div>
+            <button type="button" class="icon-btn var-popover-close-btn" id="btn-close-var-popover" title="Close (Esc)" aria-label="Close Variable Popover">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+        <div class="var-popover-body">
+            <div class="var-popover-row hidden" id="var-popover-initial-row">
+                <span class="var-row-label">INITIAL</span>
+                <span class="var-row-readonly code-font" id="var-popover-initial"></span>
+                <button type="button" class="btn-link-sm hidden" id="btn-reset-var-popover" title="Reset Current to Initial">Reset</button>
+            </div>
+            <div class="var-popover-row var-popover-row-edit">
+                <label class="var-row-label" for="var-popover-value" id="var-popover-value-label">CURRENT</label>
+                <div class="var-value-edit-wrap">
+                    <textarea id="var-popover-value" class="var-popover-input code-font" rows="1" placeholder="Set variable value..." autocomplete="off" spellcheck="false"></textarea>
+                </div>
+            </div>
+            <div class="var-popover-actions-bar">
+                <div class="var-scope-inline">
+                    <span class="var-row-label">SCOPE</span>
+                    <select id="var-popover-scope" class="var-popover-select"></select>
+                </div>
+                <button type="button" class="btn btn-sm btn-primary var-save-inline-btn" id="btn-save-var-popover">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Postman-style {{variable}} Autocomplete Dropdown -->
+    <div id="variable-autocomplete" class="variable-autocomplete hidden" role="listbox" aria-label="Variable suggestions"></div>
+
+    <!-- Collection Actions Context / More Menu -->
+    <div id="collection-context-menu" class="coll-context-menu hidden" role="menu" aria-label="Collection Actions"></div>
+
+    <!-- Non-blocking Toast Container -->
+    <div id="app-toast-container" class="app-toast-container" aria-live="polite"></div>
+
+    <!-- Common HTTP Header Suggestions -->
+    <datalist id="common-http-headers">
+        <option value="Accept"></option>
+        <option value="Authorization"></option>
+        <option value="Cache-Control"></option>
+        <option value="Content-Type"></option>
+        <option value="Cookie"></option>
+        <option value="Origin"></option>
+        <option value="User-Agent"></option>
+        <option value="X-API-Key"></option>
+        <option value="X-Requested-With"></option>
+        <option value="X-Request-Id"></option>
+    </datalist>
+
     <!-- Core App JS Scripts -->
+    <script src="utils.js"></script>
     <script src="sandbox.js"></script>
-    <script src="runner.js?v=3"></script>
+    <script src="runner.js?v=4"></script>
     <script src="snippets.js"></script>
-    <script src="app.js?v=3"></script>
+    <script src="app.js?v=4"></script>
 </body>
 </html>

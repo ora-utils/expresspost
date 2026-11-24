@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "desktop": "electron .",
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
     "build-win": "electron-builder --win --x64"
   },
   "dependencies": {
@@ -24,6 +25,7 @@
       "output": "dist"
     },
     "win": {
+      "icon": "public/logo.png",
       "target": [
         "portable"
       ]
